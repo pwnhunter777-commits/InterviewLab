@@ -1,0 +1,6 @@
+{
+  "name": "InterviewLab",
+  "description": "AI-Based Mock Interview System with live webcam and audio analysis, speech transcription, structured rubric scoring, and performance analytics.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

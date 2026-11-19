@@ -1,0 +1,180 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Registered candidate profile linked to Firebase Auth UID.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "email": { "type": "string", "minLength": 3, "maxLength": 160 },
+        "targetRole": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "experienceLevel": { "type": "string", "enum": ["Student", "Fresher", "Mid-Level", "Senior"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "email", "targetRole", "experienceLevel", "createdAt", "updatedAt"]
+    },
+    "InterviewCategory": {
+      "title": "InterviewCategory",
+      "description": "Custom user-managed interview track/category.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "description": { "type": "string", "minLength": 1, "maxLength": 400 },
+        "difficultyFocus": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "defaultTimePerQuestionSec": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "name", "description", "difficultyFocus", "defaultTimePerQuestionSec", "createdAt", "updatedAt"]
+    },
+    "InterviewQuestion": {
+      "title": "InterviewQuestion",
+      "description": "Custom user-managed interview question.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "categoryId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "prompt": { "type": "string", "minLength": 5, "maxLength": 600 },
+        "difficulty": { "type": "string", "enum": ["Easy", "Medium", "Hard"] },
+        "expectedKeywords": { "type": "array" },
+        "idealAnswerGuide": { "type": "string", "minLength": 1, "maxLength": 1500 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "categoryId", "prompt", "difficulty", "expectedKeywords", "idealAnswerGuide", "createdAt", "updatedAt"]
+    },
+    "InterviewSession": {
+      "title": "InterviewSession",
+      "description": "Mock interview session header, aggregate metrics, and overall AI summary.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "mode": { "type": "string", "enum": ["demo", "pro"] },
+        "categoryId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "categoryName": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "status": { "type": "string", "enum": ["in_progress", "completed"] },
+        "questionCount": { "type": "integer" },
+        "overallScore": { "type": "number" },
+        "relevanceScore": { "type": "number" },
+        "clarityScore": { "type": "number" },
+        "keywordCoverageScore": { "type": "number" },
+        "avgWpm": { "type": "number" },
+        "totalDurationSec": { "type": "number" },
+        "summaryFeedback": { "type": "string", "maxLength": 2000 },
+        "topStrengths": { "type": "array" },
+        "topImprovements": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "userId",
+        "mode",
+        "categoryId",
+        "categoryName",
+        "status",
+        "questionCount",
+        "overallScore",
+        "relevanceScore",
+        "clarityScore",
+        "keywordCoverageScore",
+        "avgWpm",
+        "totalDurationSec",
+        "summaryFeedback",
+        "topStrengths",
+        "topImprovements",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SessionResponse": {
+      "title": "SessionResponse",
+      "description": "Recorded question response metadata, acoustic/visual telemetry, transcript, and AI feedback.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "sessionId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "questionId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "questionPrompt": { "type": "string", "minLength": 1, "maxLength": 600 },
+        "transcript": { "type": "string", "maxLength": 8000 },
+        "transcriptSource": { "type": "string", "enum": ["gemini_audio", "web_speech", "manual_text", "unavailable"] },
+        "speakingDurationSec": { "type": "number" },
+        "wordCount": { "type": "integer" },
+        "wpm": { "type": "number" },
+        "pauseCount": { "type": "integer" },
+        "avgSilenceRatio": { "type": "number" },
+        "voiceClarityLabel": { "type": "string", "enum": ["Clear", "Moderate", "Quiet", "Unavailable"] },
+        "voiceClarityDb": { "type": "number" },
+        "eyeContactRatio": { "type": "number" },
+        "eyeContactStatus": { "type": "string", "maxLength": 80 },
+        "facePresenceRatio": { "type": "number" },
+        "relevanceScore": { "type": "number" },
+        "keywordScore": { "type": "number" },
+        "communicationScore": { "type": "number" },
+        "overallQuestionScore": { "type": "number" },
+        "matchedKeywords": { "type": "array" },
+        "missingKeywords": { "type": "array" },
+        "aiFeedback": { "type": "string", "maxLength": 2500 },
+        "strengths": { "type": "array" },
+        "improvements": { "type": "array" },
+        "measurementNotes": { "type": "string", "maxLength": 600 },
+        "recordingRef": { "type": "string", "maxLength": 300 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "userId",
+        "sessionId",
+        "questionId",
+        "questionPrompt",
+        "transcript",
+        "transcriptSource",
+        "speakingDurationSec",
+        "wordCount",
+        "wpm",
+        "pauseCount",
+        "avgSilenceRatio",
+        "voiceClarityLabel",
+        "voiceClarityDb",
+        "eyeContactRatio",
+        "eyeContactStatus",
+        "facePresenceRatio",
+        "relevanceScore",
+        "keywordScore",
+        "communicationScore",
+        "overallQuestionScore",
+        "matchedKeywords",
+        "missingKeywords",
+        "aiFeedback",
+        "strengths",
+        "improvements",
+        "measurementNotes",
+        "recordingRef",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Candidate profile documents, strictly isolated per user UID."
+    },
+    "/categories/{categoryId}": {
+      "schema": { "$ref": "#/entities/InterviewCategory" },
+      "description": "User-created interview categories."
+    },
+    "/questions/{questionId}": {
+      "schema": { "$ref": "#/entities/InterviewQuestion" },
+      "description": "User-created interview questions."
+    },
+    "/sessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/InterviewSession" },
+      "description": "Interview sessions owned by a candidate."
+    },
+    "/sessions/{sessionId}/responses/{responseId}": {
+      "schema": { "$ref": "#/entities/SessionResponse" },
+      "description": "Per-question recorded response telemetry and AI evaluation nested under a session."
+    }
+  }
+}

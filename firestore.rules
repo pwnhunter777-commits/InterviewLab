@@ -1,0 +1,282 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isVerified() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isVerified() && (
+        request.auth.token.email == 'moralst.official@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidStringList(arr, maxLen) {
+      return arr is list && arr.size() <= maxLen && (arr.size() == 0 || arr[0] is string);
+    }
+
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'email', 'targetRole', 'experienceLevel', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'email', 'targetRole', 'experienceLevel', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.uid == request.auth.uid
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+        && data.targetRole is string && data.targetRole.size() >= 1 && data.targetRole.size() <= 100
+        && data.experienceLevel in ['Student', 'Fresher', 'Mid-Level', 'Senior']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCategory(data) {
+      return data.keys().hasAll(['ownerId', 'name', 'description', 'difficultyFocus', 'defaultTimePerQuestionSec', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'name', 'description', 'difficultyFocus', 'defaultTimePerQuestionSec', 'createdAt', 'updatedAt'])
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 80
+        && data.description is string && data.description.size() >= 1 && data.description.size() <= 400
+        && data.difficultyFocus is string && data.difficultyFocus.size() >= 1 && data.difficultyFocus.size() <= 60
+        && data.defaultTimePerQuestionSec is int && data.defaultTimePerQuestionSec >= 30 && data.defaultTimePerQuestionSec <= 600
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidQuestion(data) {
+      return data.keys().hasAll(['ownerId', 'categoryId', 'prompt', 'difficulty', 'expectedKeywords', 'idealAnswerGuide', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'categoryId', 'prompt', 'difficulty', 'expectedKeywords', 'idealAnswerGuide', 'createdAt', 'updatedAt'])
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && isValidId(data.categoryId)
+        && data.prompt is string && data.prompt.size() >= 5 && data.prompt.size() <= 600
+        && data.difficulty in ['Easy', 'Medium', 'Hard']
+        && isValidStringList(data.expectedKeywords, 12)
+        && data.idealAnswerGuide is string && data.idealAnswerGuide.size() >= 1 && data.idealAnswerGuide.size() <= 1500
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSession(data) {
+      return data.keys().hasAll([
+          'userId', 'mode', 'categoryId', 'categoryName', 'status', 'questionCount',
+          'overallScore', 'relevanceScore', 'clarityScore', 'keywordCoverageScore',
+          'avgWpm', 'totalDurationSec', 'summaryFeedback', 'topStrengths', 'topImprovements',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'userId', 'mode', 'categoryId', 'categoryName', 'status', 'questionCount',
+          'overallScore', 'relevanceScore', 'clarityScore', 'keywordCoverageScore',
+          'avgWpm', 'totalDurationSec', 'summaryFeedback', 'topStrengths', 'topImprovements',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.userId)
+        && data.userId == request.auth.uid
+        && data.mode in ['demo', 'pro']
+        && isValidId(data.categoryId)
+        && data.categoryName is string && data.categoryName.size() >= 1 && data.categoryName.size() <= 80
+        && data.status in ['in_progress', 'completed']
+        && data.questionCount is int && data.questionCount >= 1 && data.questionCount <= 20
+        && data.overallScore is number && data.overallScore >= 0 && data.overallScore <= 100
+        && data.relevanceScore is number && data.relevanceScore >= 0 && data.relevanceScore <= 100
+        && data.clarityScore is number && data.clarityScore >= 0 && data.clarityScore <= 100
+        && data.keywordCoverageScore is number && data.keywordCoverageScore >= 0 && data.keywordCoverageScore <= 100
+        && data.avgWpm is number && data.avgWpm >= 0 && data.avgWpm <= 400
+        && data.totalDurationSec is number && data.totalDurationSec >= 0 && data.totalDurationSec <= 7200
+        && data.summaryFeedback is string && data.summaryFeedback.size() <= 2000
+        && isValidStringList(data.topStrengths, 6)
+        && isValidStringList(data.topImprovements, 6)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSessionResponse(data, sessionId) {
+      return data.keys().hasAll([
+          'userId', 'sessionId', 'questionId', 'questionPrompt', 'transcript',
+          'transcriptSource', 'speakingDurationSec', 'wordCount', 'wpm', 'pauseCount',
+          'avgSilenceRatio', 'voiceClarityLabel', 'voiceClarityDb', 'eyeContactRatio',
+          'eyeContactStatus', 'facePresenceRatio', 'relevanceScore', 'keywordScore',
+          'communicationScore', 'overallQuestionScore', 'matchedKeywords',
+          'missingKeywords', 'aiFeedback', 'strengths', 'improvements',
+          'measurementNotes', 'recordingRef', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'userId', 'sessionId', 'questionId', 'questionPrompt', 'transcript',
+          'transcriptSource', 'speakingDurationSec', 'wordCount', 'wpm', 'pauseCount',
+          'avgSilenceRatio', 'voiceClarityLabel', 'voiceClarityDb', 'eyeContactRatio',
+          'eyeContactStatus', 'facePresenceRatio', 'relevanceScore', 'keywordScore',
+          'communicationScore', 'overallQuestionScore', 'matchedKeywords',
+          'missingKeywords', 'aiFeedback', 'strengths', 'improvements',
+          'measurementNotes', 'recordingRef', 'createdAt'
+        ])
+        && isValidId(data.userId)
+        && data.userId == request.auth.uid
+        && isValidId(data.sessionId)
+        && data.sessionId == sessionId
+        && isValidId(data.questionId)
+        && data.questionPrompt is string && data.questionPrompt.size() >= 1 && data.questionPrompt.size() <= 600
+        && data.transcript is string && data.transcript.size() <= 8000
+        && data.transcriptSource in ['gemini_audio', 'web_speech', 'manual_text', 'unavailable']
+        && data.speakingDurationSec is number && data.speakingDurationSec >= 0 && data.speakingDurationSec <= 1800
+        && data.wordCount is int && data.wordCount >= 0 && data.wordCount <= 5000
+        && data.wpm is number && data.wpm >= 0 && data.wpm <= 400
+        && data.pauseCount is int && data.pauseCount >= 0 && data.pauseCount <= 500
+        && data.avgSilenceRatio is number && data.avgSilenceRatio >= 0 && data.avgSilenceRatio <= 100
+        && data.voiceClarityLabel in ['Clear', 'Moderate', 'Quiet', 'Unavailable']
+        && data.voiceClarityDb is number && data.voiceClarityDb >= -120 && data.voiceClarityDb <= 20
+        && data.eyeContactRatio is number && data.eyeContactRatio >= -1 && data.eyeContactRatio <= 100
+        && data.eyeContactStatus is string && data.eyeContactStatus.size() >= 1 && data.eyeContactStatus.size() <= 80
+        && data.facePresenceRatio is number && data.facePresenceRatio >= -1 && data.facePresenceRatio <= 100
+        && data.relevanceScore is number && data.relevanceScore >= 0 && data.relevanceScore <= 100
+        && data.keywordScore is number && data.keywordScore >= 0 && data.keywordScore <= 100
+        && data.communicationScore is number && data.communicationScore >= 0 && data.communicationScore <= 100
+        && data.overallQuestionScore is number && data.overallQuestionScore >= 0 && data.overallQuestionScore <= 100
+        && isValidStringList(data.matchedKeywords, 15)
+        && isValidStringList(data.missingKeywords, 15)
+        && data.aiFeedback is string && data.aiFeedback.size() <= 2500
+        && isValidStringList(data.strengths, 6)
+        && isValidStringList(data.improvements, 6)
+        && data.measurementNotes is string && data.measurementNotes.size() <= 600
+        && data.recordingRef is string && data.recordingRef.size() <= 300
+        && data.createdAt is timestamp;
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isVerified() && resource.data.uid == request.auth.uid;
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'targetRole', 'experienceLevel', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /categories/{categoryId} {
+      allow get: if isValidId(categoryId) && isVerified() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow list: if isVerified() && resource.data.ownerId == request.auth.uid;
+      allow create: if isValidId(categoryId)
+        && isVerified()
+        && isValidCategory(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(categoryId)
+        && isVerified()
+        && isValidCategory(incoming())
+        && (existing().ownerId == request.auth.uid || isAdmin())
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'difficultyFocus', 'defaultTimePerQuestionSec', 'updatedAt']);
+      allow delete: if isValidId(categoryId) && isVerified() && (existing().ownerId == request.auth.uid || isAdmin());
+    }
+
+    match /questions/{questionId} {
+      allow get: if isValidId(questionId) && isVerified() && (resource.data.ownerId == request.auth.uid || isAdmin());
+      allow list: if isVerified() && resource.data.ownerId == request.auth.uid;
+      allow create: if isValidId(questionId)
+        && isVerified()
+        && isValidQuestion(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(questionId)
+        && isVerified()
+        && isValidQuestion(incoming())
+        && (existing().ownerId == request.auth.uid || isAdmin())
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['categoryId', 'prompt', 'difficulty', 'expectedKeywords', 'idealAnswerGuide', 'updatedAt']);
+      allow delete: if isValidId(questionId) && isVerified() && (existing().ownerId == request.auth.uid || isAdmin());
+    }
+
+    match /sessions/{sessionId} {
+      allow get: if isValidId(sessionId) && isVerified() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow list: if isVerified() && resource.data.userId == request.auth.uid;
+      allow create: if isValidId(sessionId)
+        && isVerified()
+        && isValidSession(incoming())
+        && incoming().status == 'in_progress'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(sessionId)
+        && isVerified()
+        && isValidSession(incoming())
+        && (existing().userId == request.auth.uid || isAdmin())
+        && (existing().status != 'completed' || isAdmin())
+        && incoming().userId == existing().userId
+        && incoming().mode == existing().mode
+        && incoming().categoryId == existing().categoryId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'status', 'questionCount', 'overallScore', 'relevanceScore', 'clarityScore',
+            'keywordCoverageScore', 'avgWpm', 'totalDurationSec', 'summaryFeedback',
+            'topStrengths', 'topImprovements', 'updatedAt'
+          ])
+        );
+      allow delete: if isValidId(sessionId) && isVerified() && (existing().userId == request.auth.uid || isAdmin());
+
+      match /responses/{responseId} {
+        allow get: if isValidId(sessionId)
+          && isValidId(responseId)
+          && isVerified()
+          && (
+            get(/databases/$(database)/documents/sessions/$(sessionId)).data.userId == request.auth.uid ||
+            isAdmin()
+          );
+        allow list: if isVerified() && resource.data.userId == request.auth.uid;
+        allow create: if isValidId(sessionId)
+          && isValidId(responseId)
+          && isVerified()
+          && isValidSessionResponse(incoming(), sessionId)
+          && incoming().createdAt == request.time
+          && exists(/databases/$(database)/documents/sessions/$(sessionId))
+          && get(/databases/$(database)/documents/sessions/$(sessionId)).data.userId == request.auth.uid
+          && get(/databases/$(database)/documents/sessions/$(sessionId)).data.status != 'completed';
+        allow update: if false;
+        allow delete: if isValidId(sessionId)
+          && isValidId(responseId)
+          && isVerified()
+          && (
+            get(/databases/$(database)/documents/sessions/$(sessionId)).data.userId == request.auth.uid ||
+            isAdmin()
+          );
+      }
+    }
+  }
+}
