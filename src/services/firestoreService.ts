@@ -4,7 +4,6 @@ import {
   doc,
   getDoc,
   getDocs,
-  orderBy,
   query,
   serverTimestamp,
   setDoc,
@@ -333,25 +332,15 @@ export async function completeInterviewSession(params: {
 export async function listUserSessions(uid: string): Promise<InterviewSession[]> {
   const path = 'sessions';
   try {
-    const q = query(collection(db, path), where('userId', '==', uid), orderBy('createdAt', 'desc'));
-    const snap = await getDocs(q);
-    return snap.docs.map((d) => ({
+    const qSimple = query(collection(db, path), where('userId', '==', uid));
+    const snap = await getDocs(qSimple);
+    const list = snap.docs.map((d) => ({
       id: d.id,
       ...(d.data() as Omit<InterviewSession, 'id'>),
     }));
+    return list.sort((a, b) => getMillis(b.createdAt) - getMillis(a.createdAt));
   } catch (err) {
-    // Fallback without composite index if needed, sorting client-side
-    try {
-      const qSimple = query(collection(db, path), where('userId', '==', uid));
-      const snap = await getDocs(qSimple);
-      const list = snap.docs.map((d) => ({
-        id: d.id,
-        ...(d.data() as Omit<InterviewSession, 'id'>),
-      }));
-      return list.sort((a, b) => getMillis(b.createdAt) - getMillis(a.createdAt));
-    } catch (innerErr) {
-      handleFirestoreError(innerErr, OperationType.LIST, path);
-    }
+    handleFirestoreError(err, OperationType.LIST, path);
   }
 }
 

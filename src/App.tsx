@@ -40,6 +40,7 @@ import { LiveInterviewView } from './components/LiveInterviewView';
 import { ResultsReportView } from './components/ResultsReportView';
 import { QuestionBankView } from './components/QuestionBankView';
 import { HistoryView } from './components/HistoryView';
+import { OfflineIndicator, PWAInstallButton } from './components/PWAControls';
 
 type AppRoute = 'dashboard' | 'setup' | 'live' | 'report' | 'questions' | 'history' | 'profile';
 
@@ -370,16 +371,20 @@ function InterviewLabApp() {
             </span>
           </div>
 
-          {route !== 'live' && (
-            <button
-              onClick={() => handleLaunchSetup('pro')}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              New Interview
-            </button>
-          )}
+          <div className="flex items-center gap-3 shrink-0">
+            <PWAInstallButton />
+            {route !== 'live' && (
+              <button
+                onClick={() => handleLaunchSetup('pro')}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                New Interview
+              </button>
+            )}
+          </div>
         </header>
+        <OfflineIndicator />
 
         <main className="flex-1 max-w-6xl w-full mx-auto px-6 py-8">
           {workspaceError && (

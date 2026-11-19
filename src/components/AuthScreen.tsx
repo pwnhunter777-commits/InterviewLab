@@ -1,5 +1,6 @@
 import React from 'react';
 import { ArrowRight } from 'lucide-react';
+import { OfflineIndicator, PWAInstallButton } from './PWAControls';
 
 interface AuthScreenProps {
   onGoogleSignIn: () => Promise<void>;
@@ -19,15 +20,19 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
           <span className="text-lg font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0 font-display">
             InterviewLab
           </span>
-          <button
-            onClick={onGoogleSignIn}
-            disabled={signingIn}
-            className="px-4 py-2 text-sm font-medium text-white bg-slate-900 rounded-lg hover:bg-slate-800 disabled:opacity-60 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            {signingIn ? 'Connecting...' : 'Sign In'}
-          </button>
+          <div className="flex items-center gap-3 shrink-0">
+            <PWAInstallButton />
+            <button
+              onClick={onGoogleSignIn}
+              disabled={signingIn}
+              className="px-4 py-2 text-sm font-medium text-white bg-slate-900 rounded-lg hover:bg-slate-800 disabled:opacity-60 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              {signingIn ? 'Connecting...' : 'Sign In'}
+            </button>
+          </div>
         </div>
       </header>
+      <OfflineIndicator />
 
       <main className="flex-1 flex items-center justify-center p-6">
         <div className="max-w-md w-full bg-white border border-slate-200 rounded-xl p-8 space-y-6">

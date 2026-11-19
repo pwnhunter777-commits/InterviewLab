@@ -382,7 +382,11 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
   };
 
   const handleEvaluateAnswer = async () => {
-    if (!sessionId || !currentQuestion) return;
+    if (!currentQuestion) return;
+    if (!sessionId) {
+      setErrorBanner('Session is not initialized yet. Please wait a moment or check your connection.');
+      return;
+    }
     setErrorBanner(null);
     setPhase('evaluating');
 
