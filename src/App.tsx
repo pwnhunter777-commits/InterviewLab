@@ -138,7 +138,17 @@ function InterviewLabApp() {
     try {
       await signInWithPopup(auth, googleAuthProvider);
     } catch (err) {
-      setAuthError(err instanceof Error ? err.message : 'Google Sign-In failed.');
+      const code = (err as { code?: string })?.code;
+      if (code === 'auth/unauthorized-domain') {
+        const host = window.location.hostname;
+        setAuthError(
+          `Domain "${host}" is not authorized in Firebase Auth yet. Add "${host}" under Firebase Console → Authentication → Settings → Authorized domains (Project: gen-lang-client-0331851904), or open the Development App URL.`
+        );
+      } else if (code === 'auth/popup-blocked') {
+        setAuthError('Sign-in popup was blocked by the browser. Please allow popups for this site and try again.');
+      } else {
+        setAuthError(err instanceof Error ? err.message : 'Google Sign-In failed.');
+      }
     } finally {
       setSigningIn(false);
     }

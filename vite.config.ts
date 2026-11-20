@@ -55,6 +55,7 @@ export default defineConfig(() => {
           maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
           globIgnores: ['**/mediapipe-wasm/**'],
+          navigateFallbackDenylist: [/^\/api\//, /^\/__\//],
           runtimeCaching: [
             {
               urlPattern: /^\/mediapipe-wasm\/.*/i,
