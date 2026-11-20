@@ -21,6 +21,26 @@ import {
   SessionResponse,
   UserProfile,
 } from '../types/interview';
+import {
+  completeLocalSession,
+  createLocalCategory,
+  createLocalSession,
+  deleteLocalCategory,
+  deleteLocalQuestion,
+  deleteLocalSession,
+  getLocalUserProfile,
+  listLocalCategories,
+  listLocalQuestions,
+  listLocalSessionResponses,
+  listLocalSessions,
+  saveLocalQuestion,
+  saveLocalSessionResponse,
+  saveLocalUserProfile,
+} from './localWorkspaceService';
+
+function isLocalId(id?: string): boolean {
+  return Boolean(id && id.startsWith('local_'));
+}
 
 function makeSafeId(prefix: string): string {
   const rand = Math.random().toString(36).slice(2, 10);
@@ -28,6 +48,9 @@ function makeSafeId(prefix: string): string {
 }
 
 export async function getUserProfile(uid: string): Promise<UserProfile | null> {
+  if (isLocalId(uid)) {
+    return getLocalUserProfile(uid);
+  }
   const path = `users/${uid}`;
   try {
     const snap = await getDoc(doc(db, 'users', uid));
@@ -46,6 +69,9 @@ export async function saveUserProfile(params: {
   experienceLevel: ExperienceLevel;
   isNew: boolean;
 }): Promise<UserProfile> {
+  if (isLocalId(params.uid)) {
+    return saveLocalUserProfile(params);
+  }
   const path = `users/${params.uid}`;
   const docRef = doc(db, 'users', params.uid);
   const cleanName = params.displayName.trim().slice(0, 100) || 'Candidate';
@@ -79,6 +105,9 @@ export async function saveUserProfile(params: {
 }
 
 export async function listCustomCategories(uid: string): Promise<InterviewCategory[]> {
+  if (isLocalId(uid)) {
+    return listLocalCategories(uid);
+  }
   const path = 'categories';
   try {
     const q = query(collection(db, path), where('ownerId', '==', uid));
@@ -100,6 +129,9 @@ export async function createCustomCategory(params: {
   difficultyFocus: string;
   defaultTimePerQuestionSec: number;
 }): Promise<InterviewCategory> {
+  if (isLocalId(params.ownerId)) {
+    return createLocalCategory(params);
+  }
   const id = makeSafeId('cat');
   const path = `categories/${id}`;
   try {
@@ -124,6 +156,10 @@ export async function createCustomCategory(params: {
 }
 
 export async function deleteCustomCategory(categoryId: string): Promise<void> {
+  if (isLocalId(categoryId)) {
+    deleteLocalCategory(categoryId);
+    return;
+  }
   const path = `categories/${categoryId}`;
   try {
     await deleteDoc(doc(db, 'categories', categoryId));
@@ -133,6 +169,9 @@ export async function deleteCustomCategory(categoryId: string): Promise<void> {
 }
 
 export async function listCustomQuestions(uid: string): Promise<InterviewQuestion[]> {
+  if (isLocalId(uid)) {
+    return listLocalQuestions(uid);
+  }
   const path = 'questions';
   try {
     const q = query(collection(db, path), where('ownerId', '==', uid));
@@ -156,6 +195,9 @@ export async function saveCustomQuestion(params: {
   expectedKeywords: string[];
   idealAnswerGuide: string;
 }): Promise<InterviewQuestion> {
+  if (isLocalId(params.ownerId) || isLocalId(params.id)) {
+    return saveLocalQuestion(params);
+  }
   const isEdit = Boolean(params.id);
   const id = params.id || makeSafeId('q');
   const path = `questions/${id}`;
@@ -202,6 +244,10 @@ export async function saveCustomQuestion(params: {
 }
 
 export async function deleteCustomQuestion(questionId: string): Promise<void> {
+  if (isLocalId(questionId)) {
+    deleteLocalQuestion(questionId);
+    return;
+  }
   const path = `questions/${questionId}`;
   try {
     await deleteDoc(doc(db, 'questions', questionId));
@@ -217,6 +263,9 @@ export async function createInterviewSession(params: {
   categoryName: string;
   questionCount: number;
 }): Promise<InterviewSession> {
+  if (isLocalId(params.userId)) {
+    return createLocalSession(params);
+  }
   const id = makeSafeId('sess');
   const path = `sessions/${id}`;
   try {
@@ -252,6 +301,9 @@ export async function createInterviewSession(params: {
 export async function saveSessionResponse(
   response: Omit<SessionResponse, 'id' | 'createdAt'>
 ): Promise<SessionResponse> {
+  if (isLocalId(response.userId) || isLocalId(response.sessionId)) {
+    return saveLocalSessionResponse(response);
+  }
   const responseId = makeSafeId('resp');
   const path = `sessions/${response.sessionId}/responses/${responseId}`;
   try {
@@ -308,6 +360,10 @@ export async function completeInterviewSession(params: {
   topStrengths: string[];
   topImprovements: string[];
 }): Promise<void> {
+  if (isLocalId(params.sessionId)) {
+    completeLocalSession(params);
+    return;
+  }
   const path = `sessions/${params.sessionId}`;
   try {
     await updateDoc(doc(db, 'sessions', params.sessionId), {
@@ -330,6 +386,9 @@ export async function completeInterviewSession(params: {
 }
 
 export async function listUserSessions(uid: string): Promise<InterviewSession[]> {
+  if (isLocalId(uid)) {
+    return listLocalSessions(uid);
+  }
   const path = 'sessions';
   try {
     const qSimple = query(collection(db, path), where('userId', '==', uid));
@@ -348,6 +407,9 @@ export async function listSessionResponses(
   sessionId: string,
   uid: string
 ): Promise<SessionResponse[]> {
+  if (isLocalId(uid) || isLocalId(sessionId)) {
+    return listLocalSessionResponses(sessionId, uid);
+  }
   const path = `sessions/${sessionId}/responses`;
   try {
     const q = query(collection(db, 'sessions', sessionId, 'responses'), where('userId', '==', uid));
@@ -363,6 +425,10 @@ export async function listSessionResponses(
 }
 
 export async function deleteInterviewSession(sessionId: string, uid: string): Promise<void> {
+  if (isLocalId(uid) || isLocalId(sessionId)) {
+    deleteLocalSession(sessionId, uid);
+    return;
+  }
   const path = `sessions/${sessionId}`;
   try {
     const responses = await listSessionResponses(sessionId, uid);

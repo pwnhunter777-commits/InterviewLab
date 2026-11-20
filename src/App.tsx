@@ -14,6 +14,12 @@ import {
 import { auth, googleAuthProvider } from './lib/firebase';
 import { BUILT_IN_CATEGORIES, BUILT_IN_QUESTIONS } from './data/defaultCatalog';
 import {
+  clearActiveLocalSession,
+  getActiveLocalSession,
+  LocalUserSession,
+  setActiveLocalSession,
+} from './services/localWorkspaceService';
+import {
   deleteInterviewSession,
   getUserProfile,
   listCustomCategories,
@@ -63,8 +69,13 @@ export default function App() {
 function InterviewLabApp() {
   const [authReady, setAuthReady] = useState(false);
   const [user, setUser] = useState<User | null>(null);
+  const [localUser, setLocalUser] = useState<LocalUserSession | null>(null);
   const [signingIn, setSigningIn] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+
+  const activeUid = user?.uid || localUser?.uid || '';
+  const activeEmail = user?.email || (localUser ? 'Local candidate session' : '');
+  const activeInitialName = user?.displayName || localUser?.displayName || '';
 
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
@@ -109,8 +120,10 @@ function InterviewLabApp() {
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (nextUser) => {
       setUser(nextUser);
-      setAuthReady(true);
       if (nextUser) {
+        clearActiveLocalSession();
+        setLocalUser(null);
+        setAuthReady(true);
         setProfileLoading(true);
         try {
           const existing = await getUserProfile(nextUser.uid);
@@ -122,11 +135,29 @@ function InterviewLabApp() {
           setProfileLoading(false);
         }
       } else {
-        setProfile(null);
-        setCustomCategories([]);
-        setCustomQuestions([]);
-        setSessions([]);
-        setRoute('dashboard');
+        const savedLocal = getActiveLocalSession();
+        if (savedLocal) {
+          setLocalUser(savedLocal);
+          setAuthReady(true);
+          setProfileLoading(true);
+          try {
+            const existing = await getUserProfile(savedLocal.uid);
+            setProfile(existing);
+            await loadWorkspaceData(savedLocal.uid);
+          } catch (err) {
+            setWorkspaceError(err instanceof Error ? err.message : 'Failed to load local workspace.');
+          } finally {
+            setProfileLoading(false);
+          }
+        } else {
+          setLocalUser(null);
+          setAuthReady(true);
+          setProfile(null);
+          setCustomCategories([]);
+          setCustomQuestions([]);
+          setSessions([]);
+          setRoute('dashboard');
+        }
       }
     });
     return () => unsub();
@@ -142,10 +173,10 @@ function InterviewLabApp() {
       if (code === 'auth/unauthorized-domain') {
         const host = window.location.hostname;
         setAuthError(
-          `Domain "${host}" is not authorized in Firebase Auth yet. Add "${host}" under Firebase Console → Authentication → Settings → Authorized domains (Project: gen-lang-client-0331851904), or open the Development App URL.`
+          `Domain "${host}" is not authorized in Firebase Auth yet. Add "${host}" under Firebase Console → Authentication → Settings → Authorized domains (Project: gen-lang-client-0331851904), or sign in with your name above.`
         );
       } else if (code === 'auth/popup-blocked') {
-        setAuthError('Sign-in popup was blocked by the browser. Please allow popups for this site and try again.');
+        setAuthError('Sign-in popup was blocked by the browser. Allow popups or sign in with your name above.');
       } else {
         setAuthError(err instanceof Error ? err.message : 'Google Sign-In failed.');
       }
@@ -154,8 +185,35 @@ function InterviewLabApp() {
     }
   };
 
+  const handleNameSignIn = async (name: string) => {
+    setSigningIn(true);
+    setAuthError(null);
+    setProfileLoading(true);
+    try {
+      const session = setActiveLocalSession(name);
+      setLocalUser(session);
+      const existing = await getUserProfile(session.uid);
+      setProfile(existing);
+      await loadWorkspaceData(session.uid);
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : 'Name Sign-In failed.');
+    } finally {
+      setProfileLoading(false);
+      setSigningIn(false);
+    }
+  };
+
   const handleSignOut = async () => {
-    await signOut(auth);
+    clearActiveLocalSession();
+    setLocalUser(null);
+    setProfile(null);
+    setCustomCategories([]);
+    setCustomQuestions([]);
+    setSessions([]);
+    setRoute('dashboard');
+    if (user) {
+      await signOut(auth);
+    }
   };
 
   const handleSaveProfile = async (data: {
@@ -163,11 +221,11 @@ function InterviewLabApp() {
     targetRole: string;
     experienceLevel: ExperienceLevel;
   }) => {
-    if (!user) return;
+    if (!activeUid) return;
     const saved = await saveUserProfile({
-      uid: user.uid,
+      uid: activeUid,
       displayName: data.displayName,
-      email: user.email || '',
+      email: activeEmail || 'local@interviewlab.app',
       targetRole: data.targetRole,
       experienceLevel: data.experienceLevel,
       isNew: !profile,
@@ -179,13 +237,13 @@ function InterviewLabApp() {
   };
 
   const handleOpenReport = async (session: InterviewSession) => {
-    if (!user) return;
+    if (!activeUid) return;
     setReportSession(session);
     setReportResponses([]);
     setReportLoading(true);
     setRoute('report');
     try {
-      const resps = await listSessionResponses(session.id, user.uid);
+      const resps = await listSessionResponses(session.id, activeUid);
       setReportResponses(resps);
     } catch (err) {
       setWorkspaceError(err instanceof Error ? err.message : 'Failed to load report details.');
@@ -195,8 +253,8 @@ function InterviewLabApp() {
   };
 
   const handleDeleteSession = async (sessionId: string) => {
-    if (!user) return;
-    await deleteInterviewSession(sessionId, user.uid);
+    if (!activeUid) return;
+    await deleteInterviewSession(sessionId, activeUid);
     setSessions((prev) => prev.filter((s) => s.id !== sessionId));
   };
 
@@ -214,10 +272,11 @@ function InterviewLabApp() {
     );
   }
 
-  if (!user) {
+  if (!activeUid) {
     return (
       <AuthScreen
         onGoogleSignIn={handleGoogleSignIn}
+        onNameSignIn={handleNameSignIn}
         signingIn={signingIn}
         authError={authError}
       />
@@ -247,8 +306,8 @@ function InterviewLabApp() {
           </button>
         </header>
         <ProfileSetupView
-          initialName={user.displayName || ''}
-          email={user.email || ''}
+          initialName={activeInitialName}
+          email={activeEmail}
           onSave={handleSaveProfile}
         />
       </div>
@@ -433,7 +492,7 @@ function InterviewLabApp() {
 
           {route === 'live' && liveConfig && (
             <LiveInterviewView
-              userId={user.uid}
+              userId={activeUid}
               mode={liveConfig.mode}
               category={liveConfig.category}
               questions={liveConfig.selectedQuestions}
@@ -442,7 +501,7 @@ function InterviewLabApp() {
               onExit={() => {
                 setLiveConfig(null);
                 setRoute('dashboard');
-                loadWorkspaceData(user.uid);
+                loadWorkspaceData(activeUid);
               }}
               onCompleted={(session, resps) => {
                 setLiveConfig(null);
@@ -450,7 +509,7 @@ function InterviewLabApp() {
                 setReportResponses(resps);
                 setReportLoading(false);
                 setRoute('report');
-                loadWorkspaceData(user.uid);
+                loadWorkspaceData(activeUid);
               }}
             />
           )}
@@ -467,10 +526,10 @@ function InterviewLabApp() {
 
           {route === 'questions' && (
             <QuestionBankView
-              userId={user.uid}
+              userId={activeUid}
               categories={allCategories}
               questions={allQuestions}
-              onRefreshCatalog={() => loadWorkspaceData(user.uid)}
+              onRefreshCatalog={() => loadWorkspaceData(activeUid)}
             />
           )}
 
