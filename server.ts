@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { createServer as createHttpServer } from "http";
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -27,6 +28,7 @@ function getGeminiClient(): GoogleGenAI {
 
 async function startServer() {
   const app = express();
+  const httpServer = createHttpServer(app);
   app.use(express.json({ limit: "25mb" }));
 
   app.get("/api/health", (_req, res) => {
@@ -295,8 +297,13 @@ Produce:
 
   if (!isProduction) {
     const { createServer: createViteServer } = await import("vite");
+    const hmrDisabled = process.env.DISABLE_HMR === "true";
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: hmrDisabled ? false : { server: httpServer },
+        ws: { server: httpServer },
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);
@@ -308,7 +315,7 @@ Produce:
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`InterviewLab server running on http://0.0.0.0:${PORT}`);
   });
 }
