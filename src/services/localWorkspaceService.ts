@@ -31,7 +31,13 @@ function readJson<T>(key: string, fallback: T): T {
 }
 
 function writeJson<T>(key: string, value: T): void {
-  window.localStorage.setItem(key, JSON.stringify(value));
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    throw new Error(
+      'Local browser storage is full or unavailable. Clear browser storage or sign in with Google to continue.'
+    );
+  }
 }
 
 function nowTimestamp(): { seconds: number } {
@@ -48,17 +54,18 @@ export function buildLocalUidFromName(name: string): string {
   const slug = clean
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '')
-    .slice(0, 48);
+    .slice(0, 36);
+  const rand = Math.random().toString(36).slice(2, 8);
 
   if (slug) {
-    return `local_${slug}`;
+    return `local_${slug}_${rand}`;
   }
 
   let hash = 0;
   for (let i = 0; i < clean.length; i++) {
     hash = (hash * 31 + clean.charCodeAt(i)) >>> 0;
   }
-  return `local_user_${hash.toString(36)}`;
+  return `local_user_${hash.toString(36)}_${rand}`;
 }
 
 export function getActiveLocalSession(): LocalUserSession | null {
@@ -153,6 +160,11 @@ export function deleteLocalCategory(categoryId: string): void {
   writeJson(
     CATEGORIES_KEY,
     all.filter((c) => c.id !== categoryId)
+  );
+  const qs = readJson<InterviewQuestion[]>(QUESTIONS_KEY, []);
+  writeJson(
+    QUESTIONS_KEY,
+    qs.filter((q) => q.categoryId !== categoryId)
   );
 }
 

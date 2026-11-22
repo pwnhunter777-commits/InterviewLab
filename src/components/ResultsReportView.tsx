@@ -1,7 +1,14 @@
 import React, { useState } from 'react';
 import { ArrowLeft, ChevronDown, ChevronUp, Download, Printer } from 'lucide-react';
-import { InterviewSession, SessionResponse } from '../types/interview';
+import { InterviewSession, SessionResponse, TranscriptSource } from '../types/interview';
 import { formatFirestoreDate } from '../services/firestoreService';
+
+const TRANSCRIPT_SOURCE_LABELS: Record<TranscriptSource, string> = {
+  gemini_audio: 'Gemini audio',
+  web_speech: 'Browser speech',
+  manual_text: 'Typed',
+  unavailable: 'None',
+};
 
 interface ResultsReportViewProps {
   session: InterviewSession;
@@ -32,7 +39,7 @@ export const ResultsReportView: React.FC<ResultsReportViewProps> = ({
     a.href = url;
     a.download = `interview-report-${session.id}.json`;
     a.click();
-    URL.revokeObjectURL(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   return (
@@ -224,8 +231,8 @@ export const ResultsReportView: React.FC<ResultsReportViewProps> = ({
                   >
                     <div>
                       <p className="text-xs text-slate-500 mb-1">
-                        Question {idx + 1} · {resp.speakingDurationSec}s · {resp.wpm} WPM ·{' '}
-                        {resp.voiceClarityLabel} Voice · {resp.eyeContactStatus}
+                        Question {idx + 1} · {resp.speakingDurationSec}s · {resp.wpm} WPM · Voice:{' '}
+                        {resp.voiceClarityLabel} · {resp.eyeContactStatus}
                       </p>
                       <h3 className="text-sm font-semibold text-slate-900">{resp.questionPrompt}</h3>
                     </div>
@@ -235,78 +242,80 @@ export const ResultsReportView: React.FC<ResultsReportViewProps> = ({
                         {resp.overallQuestionScore}/100
                       </span>
                       {isOpen ? (
-                        <ChevronUp className="w-4 h-4 text-slate-500" />
+                        <ChevronUp className="w-4 h-4 text-slate-500 print:hidden" />
                       ) : (
-                        <ChevronDown className="w-4 h-4 text-slate-500" />
+                        <ChevronDown className="w-4 h-4 text-slate-500 print:hidden" />
                       )}
                     </div>
                   </button>
 
-                  {isOpen && (
-                    <div className="mt-5 pt-5 border-t border-slate-200 space-y-5 text-sm">
-                      {/* Measured Telemetry Strip */}
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 bg-slate-50 border border-slate-200 rounded-lg p-4 text-xs">
-                        <div>
-                          <p className="text-slate-500">Speaking Duration</p>
-                          <p className="font-mono tabular-nums font-semibold text-slate-900 mt-0.5">
-                            {resp.speakingDurationSec}s ({resp.wordCount} words)
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-slate-500">Pace &amp; Pauses</p>
-                          <p className="font-mono tabular-nums font-semibold text-slate-900 mt-0.5">
-                            {resp.wpm} WPM · {resp.pauseCount} pauses
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-slate-500">Voice Clarity (Measured)</p>
-                          <p className="font-mono tabular-nums font-semibold text-slate-900 mt-0.5">
-                            {resp.voiceClarityLabel} ({resp.voiceClarityDb} dBFS)
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-slate-500">Eye Contact (Visual Cue)</p>
-                          <p className="font-mono tabular-nums font-semibold text-slate-900 mt-0.5">
-                            {resp.eyeContactRatio >= 0
-                              ? `${resp.eyeContactRatio}% centered`
-                              : 'Unavailable'}
-                          </p>
-                        </div>
-                      </div>
-
+                  <div
+                    className={`${
+                      isOpen ? 'block' : 'hidden print:block'
+                    } mt-5 pt-5 border-t border-slate-200 space-y-5 text-sm`}
+                  >
+                    {/* Measured Telemetry Strip */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 bg-slate-50 border border-slate-200 rounded-lg p-4 text-xs">
                       <div>
-                        <p className="text-xs font-semibold text-slate-700 mb-1">
-                          Captured Transcript ({resp.transcriptSource})
-                        </p>
-                        <p className="text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-lg p-3.5 leading-relaxed">
-                          {resp.transcript || 'No transcript recorded.'}
+                        <p className="text-slate-500">Speaking Duration</p>
+                        <p className="font-mono tabular-nums font-semibold text-slate-900 mt-0.5">
+                          {resp.speakingDurationSec}s ({resp.wordCount} words)
                         </p>
                       </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-                        <div>
-                          <p className="font-semibold text-slate-800 mb-1">Matched Keywords</p>
-                          <p className="text-emerald-800">
-                            {resp.matchedKeywords.length > 0 ? resp.matchedKeywords.join(' · ') : 'None matched'}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="font-semibold text-slate-800 mb-1">Missed Keywords</p>
-                          <p className="text-slate-600">
-                            {resp.missingKeywords.length > 0 ? resp.missingKeywords.join(' · ') : 'All key concepts covered'}
-                          </p>
-                        </div>
-                      </div>
-
                       <div>
-                        <p className="text-xs font-semibold text-slate-800 mb-1">AI Evaluation &amp; Feedback</p>
-                        <p className="text-sm text-slate-700 leading-relaxed">{resp.aiFeedback}</p>
-                        <p className="text-xs text-slate-500 mt-2">
-                          Transparency Note: {resp.measurementNotes} · Recording Ref: {resp.recordingRef}
+                        <p className="text-slate-500">Pace &amp; Pauses</p>
+                        <p className="font-mono tabular-nums font-semibold text-slate-900 mt-0.5">
+                          {resp.wpm} WPM · {resp.pauseCount} pauses
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">Voice Level (Measured)</p>
+                        <p className="font-mono tabular-nums font-semibold text-slate-900 mt-0.5">
+                          {resp.voiceClarityLabel} ({resp.voiceClarityDb} dBFS)
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">Face Position (Visual Cue)</p>
+                        <p className="font-mono tabular-nums font-semibold text-slate-900 mt-0.5">
+                          {resp.eyeContactRatio >= 0
+                            ? `${resp.eyeContactRatio}% face centered`
+                            : 'Unavailable'}
                         </p>
                       </div>
                     </div>
-                  )}
+
+                    <div>
+                      <p className="text-xs font-semibold text-slate-700 mb-1">
+                        Captured Transcript ({TRANSCRIPT_SOURCE_LABELS[resp.transcriptSource] || 'None'})
+                      </p>
+                      <p className="text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-lg p-3.5 leading-relaxed">
+                        {resp.transcript || 'No transcript recorded.'}
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                      <div>
+                        <p className="font-semibold text-slate-800 mb-1">Matched Keywords</p>
+                        <p className="text-emerald-800">
+                          {resp.matchedKeywords.length > 0 ? resp.matchedKeywords.join(' · ') : 'None matched'}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="font-semibold text-slate-800 mb-1">Missed Keywords</p>
+                        <p className="text-slate-600">
+                          {resp.missingKeywords.length > 0 ? resp.missingKeywords.join(' · ') : 'All key concepts covered'}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="text-xs font-semibold text-slate-800 mb-1">AI Evaluation &amp; Feedback</p>
+                      <p className="text-sm text-slate-700 leading-relaxed">{resp.aiFeedback}</p>
+                      <p className="text-xs text-slate-500 mt-2">
+                        Transparency Note: {resp.measurementNotes} · Audio not stored
+                      </p>
+                    </div>
+                  </div>
                 </div>
               );
             })}

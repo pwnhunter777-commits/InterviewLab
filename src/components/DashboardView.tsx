@@ -1,7 +1,7 @@
 import React from 'react';
 import { ArrowRight, BarChart3, Clock, FileText, Play, Plus } from 'lucide-react';
 import { InterviewSession, UserProfile } from '../types/interview';
-import { formatFirestoreDate } from '../services/firestoreService';
+import { formatFirestoreDate, getMillis } from '../services/firestoreService';
 
 interface DashboardViewProps {
   profile: UserProfile;
@@ -28,26 +28,29 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     totalSessions > 0
       ? Math.round(completedSessions.reduce((acc, s) => acc + s.overallScore, 0) / totalSessions)
       : 0;
+  const pacedSessions = completedSessions.filter((s) => s.avgWpm > 0);
   const avgWpm =
-    totalSessions > 0
-      ? Math.round(completedSessions.reduce((acc, s) => acc + s.avgWpm, 0) / totalSessions)
+    pacedSessions.length > 0
+      ? Math.round(pacedSessions.reduce((acc, s) => acc + s.avgWpm, 0) / pacedSessions.length)
       : 0;
   const totalQuestionsAnswered = completedSessions.reduce((acc, s) => acc + s.questionCount, 0);
 
   // Recent 8 sessions chronological for trend chart
   const chartData = [...completedSessions].slice(0, 8).reverse();
 
-  // Category averages
-  const categoryMap = new Map<string, { sum: number; count: number }>();
+  // Category averages grouped by categoryId
+  const categoryMap = new Map<string, { name: string; sum: number; count: number }>();
   completedSessions.forEach((s) => {
-    const existing = categoryMap.get(s.categoryName) || { sum: 0, count: 0 };
-    categoryMap.set(s.categoryName, {
+    const existing = categoryMap.get(s.categoryId) || { name: s.categoryName, sum: 0, count: 0 };
+    categoryMap.set(s.categoryId, {
+      name: s.categoryName || existing.name,
       sum: existing.sum + s.overallScore,
       count: existing.count + 1,
     });
   });
-  const categoryAverages = Array.from(categoryMap.entries()).map(([name, val]) => ({
-    name,
+  const categoryAverages = Array.from(categoryMap.entries()).map(([id, val]) => ({
+    id,
+    name: val.name,
     avg: Math.round(val.sum / val.count),
     count: val.count,
   }));
@@ -180,7 +183,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           ) : (
             <div className="space-y-4">
               {categoryAverages.map((cat) => (
-                <div key={cat.name}>
+                <div key={cat.id}>
                   <div className="flex items-center justify-between text-xs mb-1.5">
                     <span className="font-medium text-slate-800 truncate pr-3">{cat.name}</span>
                     <span className="font-mono tabular-nums text-slate-600 shrink-0">
@@ -211,7 +214,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between gap-4">
           <div>
             <h2 className="text-base font-semibold text-slate-900">Recent Interview Sessions</h2>
-            <p className="text-xs text-slate-500">Click any completed session to inspect the full transcript &amp; AI audit</p>
+            <p className="text-xs text-slate-500">Use Open Report on any completed session to inspect the full transcript &amp; AI audit</p>
           </div>
           {sessions.length > 0 && (
             <button
@@ -300,10 +303,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   );
 };
 
+const formatShortChartDate = (ts: unknown): string => {
+  const ms = getMillis(ts);
+  if (!ms) return 'Now';
+  return new Date(ms).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+};
+
 const ScoreTrendSvg: React.FC<{ sessions: InterviewSession[] }> = ({ sessions }) => {
   const width = 560;
   const height = 200;
-  const padX = 36;
+  const padX = 40;
   const padY = 22;
   const plotW = width - padX * 2;
   const plotH = height - padY * 2;
@@ -311,7 +320,7 @@ const ScoreTrendSvg: React.FC<{ sessions: InterviewSession[] }> = ({ sessions })
   const points = sessions.map((s, idx) => {
     const x = sessions.length === 1 ? padX + plotW / 2 : padX + (idx / (sessions.length - 1)) * plotW;
     const y = padY + plotH - (Math.max(0, Math.min(100, s.overallScore)) / 100) * plotH;
-    return { x, y, score: s.overallScore, label: `S${idx + 1}` };
+    return { x, y, score: s.overallScore, label: formatShortChartDate(s.createdAt) };
   });
 
   const polyline = points.map((p) => `${p.x},${p.y}`).join(' ');

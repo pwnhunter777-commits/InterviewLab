@@ -1,8 +1,11 @@
 import "dotenv/config";
+import fs from "fs";
 import { createServer as createHttpServer } from "http";
-import express from "express";
+import express, { NextFunction, Request, Response } from "express";
 import path from "path";
 import { fileURLToPath } from "url";
+import { getApp, getApps, initializeApp } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
 import { GoogleGenAI, Type } from "@google/genai";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -10,6 +13,72 @@ const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT || 3000);
 const isProduction = process.env.NODE_ENV === "production";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-4-hydrogen";
+
+const firebaseConfigPath = path.resolve(__dirname, "firebase-applet-config.json");
+const firebaseAppletConfig = JSON.parse(fs.readFileSync(firebaseConfigPath, "utf8")) as {
+  projectId: string;
+};
+const adminApp = getApps().length
+  ? getApp()
+  : initializeApp({ projectId: firebaseAppletConfig.projectId });
+const adminAuth = getAuth(adminApp);
+
+function safeNum(val: unknown, fallback = 0, min = -Infinity, max = Infinity): number {
+  const n = Number(val);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_REQUESTS = 30;
+const ipRequestLog = new Map<string, number[]>();
+
+function interviewRateLimiter(req: Request, res: Response, next: NextFunction) {
+  const ip = req.ip || req.socket.remoteAddress || "unknown";
+  const now = Date.now();
+  const cutoff = now - RATE_LIMIT_WINDOW_MS;
+  const recent = (ipRequestLog.get(ip) || []).filter((ts) => ts > cutoff);
+  if (recent.length >= RATE_LIMIT_MAX_REQUESTS) {
+    return res.status(429).json({
+      error: "Too many interview API requests (limit: 30 per minute). Please wait briefly and try again.",
+    });
+  }
+  recent.push(now);
+  ipRequestLog.set(ip, recent);
+  if (ipRequestLog.size > 1000) {
+    for (const [key, times] of ipRequestLog.entries()) {
+      const valid = times.filter((ts) => ts > cutoff);
+      if (valid.length === 0) ipRequestLog.delete(key);
+      else ipRequestLog.set(key, valid);
+    }
+  }
+  next();
+}
+
+async function requireFirebaseAuth(req: Request, res: Response, next: NextFunction) {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    const idToken = authHeader.slice(7).trim();
+    if (!idToken) {
+      return res.status(401).json({ error: "Missing bearer token." });
+    }
+    try {
+      await adminAuth.verifyIdToken(idToken);
+      return next();
+    } catch {
+      return res.status(401).json({ error: "Invalid or expired Firebase authentication token." });
+    }
+  }
+
+  if (!isProduction && process.env.ALLOW_LOCAL_API === "true") {
+    return next();
+  }
+
+  return res.status(401).json({
+    error: "Authentication required. Please sign in with Google to use AI interview analysis.",
+  });
+}
 
 function getGeminiClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -28,12 +97,15 @@ function getGeminiClient(): GoogleGenAI {
 
 async function startServer() {
   const app = express();
+  app.set("trust proxy", 1);
   const httpServer = createHttpServer(app);
   app.use(express.json({ limit: "25mb" }));
 
   app.get("/api/health", (_req, res) => {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
   });
+
+  app.use("/api/interview", interviewRateLimiter, requireFirebaseAuth);
 
   app.post("/api/interview/transcribe", async (req, res) => {
     try {
@@ -52,7 +124,7 @@ async function startServer() {
 
       const ai = getGeminiClient();
       const response = await ai.models.generateContent({
-        model: "gemini-4-hydrogen",
+        model: GEMINI_MODEL,
         contents: {
           parts: [
             {
@@ -97,6 +169,9 @@ async function startServer() {
       if (!questionPrompt || typeof questionPrompt !== "string") {
         return res.status(400).json({ error: "Missing questionPrompt." });
       }
+      if (questionPrompt.length > 1000) {
+        return res.status(400).json({ error: "questionPrompt must not exceed 1000 characters." });
+      }
 
       const cleanTranscript = typeof transcript === "string" ? transcript.trim() : "";
       const keywords: string[] = Array.isArray(expectedKeywords)
@@ -104,17 +179,19 @@ async function startServer() {
         : [];
 
       const telemetry = {
-        speakingDurationSec: Number(measuredTelemetry?.speakingDurationSec ?? 0),
-        wordCount: Number(measuredTelemetry?.wordCount ?? 0),
-        wpm: Number(measuredTelemetry?.wpm ?? 0),
-        pauseCount: Number(measuredTelemetry?.pauseCount ?? 0),
-        avgSilenceRatio: Number(measuredTelemetry?.avgSilenceRatio ?? 0),
+        speakingDurationSec: safeNum(measuredTelemetry?.speakingDurationSec, 0, 0, 1800),
+        wordCount: safeNum(measuredTelemetry?.wordCount, 0, 0, 5000),
+        wpm: safeNum(measuredTelemetry?.wpm, 0, 0, 400),
+        pauseCount: safeNum(measuredTelemetry?.pauseCount, 0, 0, 500),
+        avgSilenceRatio: safeNum(measuredTelemetry?.avgSilenceRatio, 0, 0, 100),
         voiceClarityLabel: String(measuredTelemetry?.voiceClarityLabel ?? "Unavailable"),
-        voiceClarityDb: Number(measuredTelemetry?.voiceClarityDb ?? -100),
-        eyeContactRatio: Number(measuredTelemetry?.eyeContactRatio ?? -1),
+        voiceClarityDb: safeNum(measuredTelemetry?.voiceClarityDb, -100, -120, 20),
+        eyeContactRatio: safeNum(measuredTelemetry?.eyeContactRatio, -1, -1, 100),
         eyeContactStatus: String(measuredTelemetry?.eyeContactStatus ?? "Unavailable (Camera Off)"),
-        facePresenceRatio: Number(measuredTelemetry?.facePresenceRatio ?? -1),
+        facePresenceRatio: safeNum(measuredTelemetry?.facePresenceRatio, -1, -1, 100),
       };
+
+      const isTypedOrUnrecorded = telemetry.speakingDurationSec <= 0 || telemetry.wpm <= 0;
 
       if (!cleanTranscript) {
         return res.json({
@@ -131,11 +208,21 @@ async function startServer() {
             "Verify microphone permissions before starting recording",
             "Speak clearly for at least 15-30 seconds covering core concepts",
           ],
-          measurementNotes: `Measured duration: ${telemetry.speakingDurationSec}s; Transcript: Unavailable/Empty; Visual cues: ${telemetry.eyeContactStatus}. No scores fabricated.`,
+          measurementNotes: `Measured duration: ${telemetry.speakingDurationSec}s; Transcript: Unavailable/Empty; Face position: ${telemetry.eyeContactStatus}. No scores fabricated.`,
         });
       }
 
       const ai = getGeminiClient();
+      const paceDisplay = isTypedOrUnrecorded
+        ? "Not measured (typed or unrecorded answer)"
+        : `${telemetry.wpm} words/min`;
+      const pausesDisplay = isTypedOrUnrecorded
+        ? "Not measured (typed or unrecorded answer)"
+        : `${telemetry.pauseCount} pauses (>1.2s silence), ${telemetry.avgSilenceRatio}% silence ratio`;
+      const voiceLevelDisplay = isTypedOrUnrecorded
+        ? "Not measured (typed or unrecorded answer)"
+        : `${telemetry.voiceClarityLabel} (${telemetry.voiceClarityDb} dBFS)`;
+
       const evaluationPrompt = `
 You are an objective technical and behavioral interview evaluator.
 Evaluate ONLY based on the candidate's actual transcript and the measured telemetry below. Do NOT fabricate metrics or claim visual/audio observations that contradict the telemetry.
@@ -152,25 +239,24 @@ ${cleanTranscript.slice(0, 8000)}
 """
 
 Measured Acoustic & Visual Telemetry (ground truth from sensors):
-- Speaking Duration: ${telemetry.speakingDurationSec} seconds
+- Speaking Duration: ${isTypedOrUnrecorded ? "Not measured (typed or unrecorded answer)" : `${telemetry.speakingDurationSec} seconds`}
 - Word Count: ${telemetry.wordCount} words
-- Speaking Pace: ${telemetry.wpm} words/min
-- Detected Pauses (>1.2s silence): ${telemetry.pauseCount}
-- Silence Ratio: ${telemetry.avgSilenceRatio}%
-- Voice Clarity Indicator: ${telemetry.voiceClarityLabel} (${telemetry.voiceClarityDb} dBFS)
-- Eye-Contact Visual Cue: ${telemetry.eyeContactStatus}${telemetry.eyeContactRatio >= 0 ? ` (${telemetry.eyeContactRatio}% centered gaze)` : ""}
+- Speaking Pace: ${paceDisplay}
+- Detected Pauses: ${pausesDisplay}
+- Voice Level Indicator: ${voiceLevelDisplay}
+- Face Position Visual Cue: ${telemetry.eyeContactStatus}${telemetry.eyeContactRatio >= 0 ? ` (${telemetry.eyeContactRatio}% face centered)` : ""}
 - Face Presence Ratio: ${telemetry.facePresenceRatio >= 0 ? `${telemetry.facePresenceRatio}%` : "Unavailable"}
 
 Scoring Rules:
 1. relevanceScore (0-100): How directly and accurately the transcript answers the question.
 2. keywordScore (0-100): Percentage/depth of expectedKeywords addressed (either verbatim or clear conceptual match). Only list keywords in matchedKeywords if genuinely present in the transcript.
-3. communicationScore (0-100): Structure, conciseness, and delivery based strictly on the transcript and measured WPM/pauses/clarity (optimal pace ~115-165 WPM; penalize incoherent fragments or extreme brevity).
+3. communicationScore (0-100): Structure, conciseness, and clarity based on the transcript and (when measured) speaking pace/pauses/voice level. Do NOT penalize missing speaking pace, pauses, voice level, or face-position telemetry if the answer was typed or unrecorded.
 4. overallQuestionScore (0-100): Weighted composite (45% relevance, 30% keywords, 25% communication).
-5. measurementNotes: Explicitly distinguish what was directly measured (duration, audio level, MediaPipe eye contact if active) vs. AI-evaluated (relevance, structure) vs. unavailable.
+5. measurementNotes: Explicitly distinguish what was directly measured (duration, voice level, MediaPipe face position if active) vs. AI-evaluated (relevance, structure) vs. unavailable.
 `;
 
       const response = await ai.models.generateContent({
-        model: "gemini-4-hydrogen",
+        model: GEMINI_MODEL,
         contents: evaluationPrompt,
         config: {
           systemInstruction:
@@ -233,7 +319,9 @@ Scoring Rules:
         improvements: Array.isArray(parsed.improvements) ? parsed.improvements.slice(0, 6) : [],
         measurementNotes: String(
           parsed.measurementNotes ||
-            `Measured: ${telemetry.speakingDurationSec}s duration, ${telemetry.wpm} WPM, ${telemetry.eyeContactStatus}. AI-estimated: content relevance & keyword alignment.`
+            (isTypedOrUnrecorded
+              ? `Measured: Typed/unrecorded answer (${telemetry.wordCount} words), ${telemetry.eyeContactStatus}. AI-estimated: content relevance & keyword alignment.`
+              : `Measured: ${telemetry.speakingDurationSec}s duration, ${telemetry.wpm} WPM, ${telemetry.eyeContactStatus}. AI-estimated: content relevance & keyword alignment.`)
         ).slice(0, 580),
       });
     } catch (err: unknown) {
@@ -266,7 +354,7 @@ Produce:
 `;
 
       const response = await ai.models.generateContent({
-        model: "gemini-4-hydrogen",
+        model: GEMINI_MODEL,
         contents: summaryPrompt,
         config: {
           responseMimeType: "application/json",

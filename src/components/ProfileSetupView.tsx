@@ -70,8 +70,11 @@ export const ProfileSetupView: React.FC<ProfileSetupViewProps> = ({
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">Full Name</label>
+            <label htmlFor="profile-display-name" className="block text-xs font-medium text-slate-700 mb-1">
+              Full Name
+            </label>
             <input
+              id="profile-display-name"
               type="text"
               required
               value={displayName}
@@ -82,8 +85,11 @@ export const ProfileSetupView: React.FC<ProfileSetupViewProps> = ({
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">Target Role</label>
+            <label htmlFor="profile-target-role" className="block text-xs font-medium text-slate-700 mb-1">
+              Target Role
+            </label>
             <input
+              id="profile-target-role"
               type="text"
               required
               value={targetRole}
@@ -94,8 +100,11 @@ export const ProfileSetupView: React.FC<ProfileSetupViewProps> = ({
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">Experience Level</label>
+            <label htmlFor="profile-experience-level" className="block text-xs font-medium text-slate-700 mb-1">
+              Experience Level
+            </label>
             <select
+              id="profile-experience-level"
               value={experienceLevel}
               onChange={(e) => setExperienceLevel(e.target.value as ExperienceLevel)}
               className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg focus:border-blue-600 focus:outline-none bg-white"

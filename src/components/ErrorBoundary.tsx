@@ -28,7 +28,7 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   handleReset = () => {
-    this.setState({ hasError: false, message: '' });
+    window.location.assign('/');
   };
 
   render() {
@@ -44,8 +44,9 @@ export class ErrorBoundary extends Component<Props, State> {
               {this.state.message}
             </p>
             <button
+              type="button"
               onClick={this.handleReset}
-              className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors"
+              className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-slate-900 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
             >
               <RotateCcw className="w-4 h-4" />
               Return to workspace

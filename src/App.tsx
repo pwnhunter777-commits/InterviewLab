@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { onAuthStateChanged, signInWithPopup, signOut, User } from 'firebase/auth';
 import {
+  AlertCircle,
   BookOpen,
   History,
   LayoutDashboard,
@@ -8,6 +9,7 @@ import {
   Menu,
   Play,
   Plus,
+  RotateCcw,
   User as UserIcon,
   X,
 } from 'lucide-react';
@@ -56,6 +58,30 @@ interface ActiveSetupConfig {
   selectedQuestions: InterviewQuestion[];
   enableCamera: boolean;
   enableMic: boolean;
+  enableWebSpeech: boolean;
+}
+
+const ALLOW_LOCAL_LOGIN = import.meta.env.VITE_ALLOW_LOCAL_LOGIN === 'true';
+
+const VALID_TOP_ROUTES: ReadonlySet<AppRoute> = new Set([
+  'dashboard',
+  'setup',
+  'questions',
+  'history',
+  'profile',
+]);
+
+function parseHashRoute(hashStr: string): AppRoute {
+  const cleaned = hashStr.replace(/^#\/?/, '').trim().toLowerCase() as AppRoute;
+  if (VALID_TOP_ROUTES.has(cleaned)) {
+    return cleaned;
+  }
+  return 'dashboard';
+}
+
+function hashForRoute(nextRoute: AppRoute): string {
+  const hashable: AppRoute = VALID_TOP_ROUTES.has(nextRoute) ? nextRoute : 'dashboard';
+  return `#/${hashable}`;
 }
 
 export default function App() {
@@ -73,14 +99,16 @@ function InterviewLabApp() {
   const [signingIn, setSigningIn] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
-  const activeUid = user?.uid || localUser?.uid || '';
-  const activeEmail = user?.email || (localUser ? 'Local candidate session' : '');
-  const activeInitialName = user?.displayName || localUser?.displayName || '';
+  const activeUid = user?.uid || (ALLOW_LOCAL_LOGIN ? localUser?.uid : '') || '';
+  const activeEmail = user?.email || (ALLOW_LOCAL_LOGIN && localUser ? 'Local candidate session' : '');
+  const activeInitialName =
+    user?.displayName || (ALLOW_LOCAL_LOGIN ? localUser?.displayName : '') || '';
 
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
 
-  const [route, setRoute] = useState<AppRoute>('dashboard');
+  const [route, setRoute] = useState<AppRoute>(() => parseHashRoute(window.location.hash));
   const [setupInitialMode, setSetupInitialMode] = useState<InterviewMode>('demo');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -117,6 +145,60 @@ function InterviewLabApp() {
     }
   }, []);
 
+  const loadProfileAndWorkspace = useCallback(
+    async (uid: string) => {
+      setProfileLoading(true);
+      setProfileError(null);
+      try {
+        const existing = await getUserProfile(uid);
+        setProfile(existing);
+        await loadWorkspaceData(uid);
+      } catch (err) {
+        setProfileError(err instanceof Error ? err.message : 'Failed to load user profile.');
+      } finally {
+        setProfileLoading(false);
+      }
+    },
+    [loadWorkspaceData]
+  );
+
+  // Scroll to top on route change
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [route]);
+
+  // Keep hash synchronized with top-level routes
+  useEffect(() => {
+    if (VALID_TOP_ROUTES.has(route)) {
+      const targetHash = hashForRoute(route);
+      if (window.location.hash !== targetHash) {
+        window.history.replaceState(null, '', targetHash);
+      }
+    }
+  }, [route]);
+
+  // Listen for browser back/forward hash changes
+  useEffect(() => {
+    const handleHashChange = () => {
+      const targetRoute = parseHashRoute(window.location.hash);
+      if (route === 'live' && targetRoute !== 'live') {
+        const confirmed = window.confirm(
+          'Leave the active interview session? Any unsaved progress on the current question will be lost.'
+        );
+        if (!confirmed) {
+          window.history.replaceState(null, '', hashForRoute('setup'));
+          return;
+        }
+        setLiveConfig(null);
+      }
+      setRoute(targetRoute);
+      setMobileMenuOpen(false);
+    };
+
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, [route]);
+
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (nextUser) => {
       setUser(nextUser);
@@ -124,44 +206,49 @@ function InterviewLabApp() {
         clearActiveLocalSession();
         setLocalUser(null);
         setAuthReady(true);
-        setProfileLoading(true);
-        try {
-          const existing = await getUserProfile(nextUser.uid);
-          setProfile(existing);
-          await loadWorkspaceData(nextUser.uid);
-        } catch (err) {
-          setWorkspaceError(err instanceof Error ? err.message : 'Failed to load user profile.');
-        } finally {
-          setProfileLoading(false);
-        }
+        await loadProfileAndWorkspace(nextUser.uid);
       } else {
-        const savedLocal = getActiveLocalSession();
+        const savedLocal = ALLOW_LOCAL_LOGIN ? getActiveLocalSession() : null;
         if (savedLocal) {
           setLocalUser(savedLocal);
           setAuthReady(true);
-          setProfileLoading(true);
-          try {
-            const existing = await getUserProfile(savedLocal.uid);
-            setProfile(existing);
-            await loadWorkspaceData(savedLocal.uid);
-          } catch (err) {
-            setWorkspaceError(err instanceof Error ? err.message : 'Failed to load local workspace.');
-          } finally {
-            setProfileLoading(false);
-          }
+          await loadProfileAndWorkspace(savedLocal.uid);
         } else {
+          if (!ALLOW_LOCAL_LOGIN) {
+            clearActiveLocalSession();
+          }
           setLocalUser(null);
           setAuthReady(true);
           setProfile(null);
+          setProfileError(null);
+          setWorkspaceError(null);
           setCustomCategories([]);
           setCustomQuestions([]);
           setSessions([]);
+          setLiveConfig(null);
+          setReportSession(null);
+          setReportResponses([]);
           setRoute('dashboard');
         }
       }
     });
     return () => unsub();
-  }, [loadWorkspaceData]);
+  }, [loadProfileAndWorkspace]);
+
+  const navigateTo = (nextRoute: AppRoute) => {
+    if (route === 'live' && nextRoute !== 'live') {
+      const confirmed = window.confirm(
+        'Leave the active interview session? Any unsaved progress on the current question will be lost.'
+      );
+      if (!confirmed) return;
+      setLiveConfig(null);
+      if (activeUid) {
+        loadWorkspaceData(activeUid);
+      }
+    }
+    setRoute(nextRoute);
+    setMobileMenuOpen(false);
+  };
 
   const handleGoogleSignIn = async () => {
     setSigningIn(true);
@@ -173,10 +260,16 @@ function InterviewLabApp() {
       if (code === 'auth/unauthorized-domain') {
         const host = window.location.hostname;
         setAuthError(
-          `Domain "${host}" is not authorized in Firebase Auth yet. Add "${host}" under Firebase Console → Authentication → Settings → Authorized domains (Project: gen-lang-client-0331851904), or sign in with your name above.`
+          `Domain "${host}" is not authorized in Firebase Auth yet. Add "${host}" under Firebase Console → Authentication → Settings → Authorized domains (Project: gen-lang-client-0331851904)${
+            ALLOW_LOCAL_LOGIN ? ', or sign in with your name above.' : '.'
+          }`
         );
       } else if (code === 'auth/popup-blocked') {
-        setAuthError('Sign-in popup was blocked by the browser. Allow popups or sign in with your name above.');
+        setAuthError(
+          `Sign-in popup was blocked by the browser. Allow popups${
+            ALLOW_LOCAL_LOGIN ? ' or sign in with your name above.' : ' and try again.'
+          }`
+        );
       } else {
         setAuthError(err instanceof Error ? err.message : 'Google Sign-In failed.');
       }
@@ -186,19 +279,19 @@ function InterviewLabApp() {
   };
 
   const handleNameSignIn = async (name: string) => {
+    if (!ALLOW_LOCAL_LOGIN) {
+      setAuthError('Local name sign-in is disabled in this environment.');
+      return;
+    }
     setSigningIn(true);
     setAuthError(null);
-    setProfileLoading(true);
     try {
       const session = setActiveLocalSession(name);
       setLocalUser(session);
-      const existing = await getUserProfile(session.uid);
-      setProfile(existing);
-      await loadWorkspaceData(session.uid);
+      await loadProfileAndWorkspace(session.uid);
     } catch (err) {
       setAuthError(err instanceof Error ? err.message : 'Name Sign-In failed.');
     } finally {
-      setProfileLoading(false);
       setSigningIn(false);
     }
   };
@@ -207,9 +300,14 @@ function InterviewLabApp() {
     clearActiveLocalSession();
     setLocalUser(null);
     setProfile(null);
+    setProfileError(null);
+    setWorkspaceError(null);
     setCustomCategories([]);
     setCustomQuestions([]);
     setSessions([]);
+    setLiveConfig(null);
+    setReportSession(null);
+    setReportResponses([]);
     setRoute('dashboard');
     if (user) {
       await signOut(auth);
@@ -232,7 +330,7 @@ function InterviewLabApp() {
     });
     setProfile(saved);
     if (route === 'profile') {
-      setRoute('dashboard');
+      navigateTo('dashboard');
     }
   };
 
@@ -241,7 +339,7 @@ function InterviewLabApp() {
     setReportSession(session);
     setReportResponses([]);
     setReportLoading(true);
-    setRoute('report');
+    navigateTo('report');
     try {
       const resps = await listSessionResponses(session.id, activeUid);
       setReportResponses(resps);
@@ -259,6 +357,13 @@ function InterviewLabApp() {
   };
 
   const handleLaunchSetup = (defaultMode: InterviewMode = 'demo') => {
+    if (route === 'live') {
+      const confirmed = window.confirm(
+        'Leave the active interview session? Any unsaved progress on the current question will be lost.'
+      );
+      if (!confirmed) return;
+      setLiveConfig(null);
+    }
     setSetupInitialMode(defaultMode);
     setRoute('setup');
     setMobileMenuOpen(false);
@@ -287,6 +392,40 @@ function InterviewLabApp() {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
         <div className="text-sm text-slate-500">Loading candidate workspace...</div>
+      </div>
+    );
+  }
+
+  if (profileError) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4">
+        <div className="max-w-md w-full bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 text-red-700 shrink-0 mt-0.5" />
+            <div>
+              <h1 className="text-base font-bold text-slate-900">Unable to Load Profile</h1>
+              <p className="text-xs text-slate-600 mt-1">{profileError}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 pt-2">
+            <button
+              type="button"
+              onClick={() => loadProfileAndWorkspace(activeUid)}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 cursor-pointer"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              Retry
+            </button>
+            <button
+              type="button"
+              onClick={handleSignOut}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-50 cursor-pointer"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              Sign Out
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
@@ -332,13 +471,21 @@ function InterviewLabApp() {
     { id: 'profile', label: 'Profile', icon: <UserIcon className="w-4 h-4" /> },
   ];
 
+  const isNavItemActive = (itemId: AppRoute) =>
+    route === itemId ||
+    (itemId === 'setup' && route === 'live') ||
+    (itemId === 'history' && route === 'report');
+
+  const isLocalDemoActive = ALLOW_LOCAL_LOGIN && Boolean(localUser && !user);
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex">
       {/* Desktop Sidebar (248px) */}
       <aside className="hidden lg:flex lg:w-[248px] lg:flex-col lg:fixed lg:inset-y-0 bg-white border-r border-slate-200 print:hidden">
         <div className="px-6 py-5 border-b border-slate-200">
           <button
-            onClick={() => setRoute('dashboard')}
+            type="button"
+            onClick={() => navigateTo('dashboard')}
             className="text-lg font-bold tracking-tight text-slate-900 font-display whitespace-nowrap cursor-pointer"
           >
             InterviewLab
@@ -347,14 +494,12 @@ function InterviewLabApp() {
 
         <nav className="flex-1 px-3 py-4 space-y-1">
           {navItems.map((item) => {
-            const active =
-              route === item.id ||
-              (item.id === 'setup' && route === 'live') ||
-              (item.id === 'history' && route === 'report');
+            const active = isNavItemActive(item.id);
             return (
               <button
                 key={item.id}
-                onClick={() => setRoute(item.id)}
+                type="button"
+                onClick={() => navigateTo(item.id)}
                 className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
                   active
                     ? 'bg-slate-900 text-white'
@@ -374,6 +519,7 @@ function InterviewLabApp() {
             <p className="text-xs text-slate-500 truncate">{profile.targetRole}</p>
           </div>
           <button
+            type="button"
             onClick={handleSignOut}
             className="w-full flex items-center gap-2 px-3 py-2 text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg cursor-pointer"
           >
@@ -388,32 +534,45 @@ function InterviewLabApp() {
         <div className="fixed inset-0 z-50 lg:hidden bg-slate-900/40 flex">
           <div className="w-64 bg-white h-full border-r border-slate-200 flex flex-col">
             <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-              <span className="text-base font-bold font-display">InterviewLab</span>
-              <button onClick={() => setMobileMenuOpen(false)} className="text-slate-500 cursor-pointer">
+              <button
+                type="button"
+                onClick={() => navigateTo('dashboard')}
+                className="text-base font-bold font-display text-slate-900 cursor-pointer"
+              >
+                InterviewLab
+              </button>
+              <button
+                type="button"
+                aria-label="Close menu"
+                onClick={() => setMobileMenuOpen(false)}
+                className="text-slate-500 hover:text-slate-900 cursor-pointer"
+              >
                 <X className="w-5 h-5" />
               </button>
             </div>
             <nav className="flex-1 p-3 space-y-1">
-              {navItems.map((item) => (
-                <button
-                  key={item.id}
-                  onClick={() => {
-                    setRoute(item.id);
-                    setMobileMenuOpen(false);
-                  }}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium rounded-lg ${
-                    route === item.id ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'
-                  }`}
-                >
-                  {item.icon}
-                  <span>{item.label}</span>
-                </button>
-              ))}
+              {navItems.map((item) => {
+                const active = isNavItemActive(item.id);
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => navigateTo(item.id)}
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium rounded-lg cursor-pointer ${
+                      active ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    {item.icon}
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })}
             </nav>
             <div className="p-4 border-t border-slate-200">
               <button
+                type="button"
                 onClick={handleSignOut}
-                className="w-full flex items-center gap-2 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100 rounded-lg"
+                className="w-full flex items-center gap-2 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100 rounded-lg cursor-pointer"
               >
                 <LogOut className="w-3.5 h-3.5" />
                 Sign Out
@@ -429,6 +588,7 @@ function InterviewLabApp() {
         <header className="sticky top-0 z-30 bg-white border-b border-slate-200 px-6 py-3.5 flex items-center justify-between gap-4 print:hidden">
           <div className="flex items-center gap-3 min-w-0">
             <button
+              type="button"
               onClick={() => setMobileMenuOpen(true)}
               className="lg:hidden p-1.5 text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100 cursor-pointer"
               aria-label="Open menu"
@@ -444,6 +604,7 @@ function InterviewLabApp() {
             <PWAInstallButton />
             {route !== 'live' && (
               <button
+                type="button"
                 onClick={() => handleLaunchSetup('pro')}
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 whitespace-nowrap shrink-0 cursor-pointer"
               >
@@ -454,12 +615,21 @@ function InterviewLabApp() {
           </div>
         </header>
         <OfflineIndicator />
+        {isLocalDemoActive && (
+          <div className="bg-amber-50 border-b border-amber-200 px-6 py-2 text-xs text-amber-900 font-medium print:hidden">
+            Local demo mode - data stays on this device
+          </div>
+        )}
 
         <main className="flex-1 max-w-6xl w-full mx-auto px-6 py-8">
           {workspaceError && (
             <div className="mb-6 p-3.5 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800 flex items-center justify-between gap-4">
               <span>{workspaceError}</span>
-              <button onClick={() => setWorkspaceError(null)} className="font-semibold hover:underline cursor-pointer">
+              <button
+                type="button"
+                onClick={() => setWorkspaceError(null)}
+                className="font-semibold hover:underline cursor-pointer"
+              >
                 Dismiss
               </button>
             </div>
@@ -472,8 +642,8 @@ function InterviewLabApp() {
               loading={dataLoading}
               onStartSetup={handleLaunchSetup}
               onOpenReport={handleOpenReport}
-              onOpenQuestionBank={() => setRoute('questions')}
-              onOpenHistory={() => setRoute('history')}
+              onOpenQuestionBank={() => navigateTo('questions')}
+              onOpenHistory={() => navigateTo('history')}
             />
           )}
 
@@ -482,7 +652,7 @@ function InterviewLabApp() {
               categories={allCategories}
               questions={allQuestions}
               initialMode={setupInitialMode}
-              onBack={() => setRoute('dashboard')}
+              onBack={() => navigateTo('dashboard')}
               onStartSession={(config) => {
                 setLiveConfig(config);
                 setRoute('live');
@@ -498,6 +668,7 @@ function InterviewLabApp() {
               questions={liveConfig.selectedQuestions}
               enableCamera={liveConfig.enableCamera}
               enableMic={liveConfig.enableMic}
+              enableWebSpeech={liveConfig.enableWebSpeech}
               onExit={() => {
                 setLiveConfig(null);
                 setRoute('dashboard');
@@ -519,7 +690,7 @@ function InterviewLabApp() {
               session={reportSession}
               responses={reportResponses}
               loading={reportLoading}
-              onBack={() => setRoute('dashboard')}
+              onBack={() => navigateTo('dashboard')}
               onStartNew={() => handleLaunchSetup('pro')}
             />
           )}
@@ -549,7 +720,7 @@ function InterviewLabApp() {
               email={profile.email}
               existingProfile={profile}
               onSave={handleSaveProfile}
-              onCancel={() => setRoute('dashboard')}
+              onCancel={() => navigateTo('dashboard')}
             />
           )}
         </main>

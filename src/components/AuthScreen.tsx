@@ -15,6 +15,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   signingIn,
   authError,
 }) => {
+  const allowLocalLogin = import.meta.env.VITE_ALLOW_LOCAL_LOGIN === 'true';
   const [candidateName, setCandidateName] = useState('');
   const [nameError, setNameError] = useState<string | null>(null);
 
@@ -50,7 +51,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
               AI Mock Interview System
             </h1>
             <p className="text-sm text-slate-600 mt-1.5">
-              Sign in with your name or Google to continue.
+              {allowLocalLogin
+                ? 'Sign in with your name (local demo) or Google to continue.'
+                : 'Sign in with Google to continue.'}
             </p>
           </div>
 
@@ -60,50 +63,58 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
             </div>
           )}
 
-          <form onSubmit={handleNameSubmit} className="space-y-3">
-            <div>
-              <label htmlFor="candidate-name" className="block text-xs font-medium text-slate-700 mb-1.5">
-                Your Name
-              </label>
-              <div className="relative">
-                <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                <input
-                  id="candidate-name"
-                  type="text"
-                  required
-                  maxLength={100}
-                  value={candidateName}
-                  onChange={(e) => {
-                    setCandidateName(e.target.value);
-                    if (nameError) setNameError(null);
-                  }}
-                  placeholder="Enter your name"
-                  className="w-full pl-10 pr-3.5 py-2.5 text-sm border border-slate-300 rounded-lg focus:border-blue-600 focus:outline-none"
-                />
+          {allowLocalLogin && (
+            <>
+              <form onSubmit={handleNameSubmit} className="space-y-3">
+                <div>
+                  <label htmlFor="candidate-name" className="block text-xs font-medium text-slate-700 mb-1.5">
+                    Your Name
+                  </label>
+                  <div className="relative">
+                    <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      id="candidate-name"
+                      type="text"
+                      required
+                      maxLength={100}
+                      value={candidateName}
+                      onChange={(e) => {
+                        setCandidateName(e.target.value);
+                        if (nameError) setNameError(null);
+                      }}
+                      placeholder="Enter your name"
+                      className="w-full pl-10 pr-3.5 py-2.5 text-sm border border-slate-300 rounded-lg focus:border-blue-600 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={signingIn}
+                  className="w-full inline-flex items-center justify-center gap-2.5 px-5 py-3 text-sm font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 disabled:opacity-60 transition-colors cursor-pointer"
+                >
+                  <span>Sign in with Name</span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </form>
+
+              <div className="relative flex items-center py-1">
+                <div className="flex-grow border-t border-slate-200" />
+                <span className="shrink mx-3 text-xs uppercase tracking-wider text-slate-400">or</span>
+                <div className="flex-grow border-t border-slate-200" />
               </div>
-            </div>
-
-            <button
-              type="submit"
-              disabled={signingIn}
-              className="w-full inline-flex items-center justify-center gap-2.5 px-5 py-3 text-sm font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 disabled:opacity-60 transition-colors cursor-pointer"
-            >
-              <span>Sign in with Name</span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
-          </form>
-
-          <div className="relative flex items-center py-1">
-            <div className="flex-grow border-t border-slate-200" />
-            <span className="shrink mx-3 text-xs uppercase tracking-wider text-slate-400">or</span>
-            <div className="flex-grow border-t border-slate-200" />
-          </div>
+            </>
+          )}
 
           <button
             type="button"
             onClick={onGoogleSignIn}
             disabled={signingIn}
-            className="w-full inline-flex items-center justify-center gap-2.5 px-5 py-3 text-sm font-semibold text-slate-800 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-60 transition-colors cursor-pointer"
+            className={`w-full inline-flex items-center justify-center gap-2.5 px-5 py-3 text-sm font-semibold rounded-lg disabled:opacity-60 transition-colors cursor-pointer ${
+              allowLocalLogin
+                ? 'text-slate-800 bg-white border border-slate-300 hover:bg-slate-50'
+                : 'text-white bg-blue-700 hover:bg-blue-800'
+            }`}
           >
             <span>{signingIn ? 'Signing in...' : 'Continue with Google'}</span>
             <ArrowRight className="w-4 h-4" />

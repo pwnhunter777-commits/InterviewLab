@@ -11,6 +11,13 @@ interface HistoryViewProps {
   onStartNew: () => void;
 }
 
+function formatDuration(sec: number): string {
+  const total = Math.max(0, Math.round(sec));
+  const mins = Math.floor(total / 60);
+  const rem = total % 60;
+  return `${mins}m ${String(rem).padStart(2, '0')}s`;
+}
+
 export const HistoryView: React.FC<HistoryViewProps> = ({
   sessions,
   loading,
@@ -21,6 +28,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
   const [search, setSearch] = useState('');
   const [modeFilter, setModeFilter] = useState<'all' | InterviewMode>('all');
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const filtered = sessions.filter((s) => {
     if (modeFilter !== 'all' && s.mode !== modeFilter) return false;
@@ -34,9 +42,15 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
   });
 
   const handleDelete = async (id: string) => {
+    if (!window.confirm('Delete this interview session and all saved responses? This action cannot be undone.')) {
+      return;
+    }
     setDeletingId(id);
+    setDeleteError(null);
     try {
       await onDeleteSession(id);
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Failed to delete session.');
     } finally {
       setDeletingId(null);
     }
@@ -59,12 +73,26 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         </button>
       </div>
 
+      {deleteError && (
+        <div className="p-3.5 rounded-lg bg-red-50 border border-red-200 text-xs text-red-800 flex items-center justify-between gap-4">
+          <span>{deleteError}</span>
+          <button
+            type="button"
+            onClick={() => setDeleteError(null)}
+            className="font-semibold hover:underline cursor-pointer"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* Filter Bar */}
       <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center gap-3">
         <div className="relative flex-1">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
             type="text"
+            aria-label="Filter interview sessions"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Filter by category or summary..."
@@ -98,10 +126,10 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
               <div key={i} className="h-11 bg-slate-100 rounded animate-pulse" />
             ))}
           </div>
-        ) : filtered.length === 0 ? (
+        ) : sessions.length === 0 ? (
           <div className="p-12 text-center">
             <FileText className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-            <p className="text-sm font-medium text-slate-700">No interview sessions match your filter</p>
+            <p className="text-sm font-medium text-slate-700">No interview sessions yet</p>
             <p className="text-xs text-slate-500 mt-1 mb-4">
               Start a Demo or Pro session to build your evaluation history.
             </p>
@@ -110,6 +138,24 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
               className="px-4 py-2 text-xs font-medium text-white bg-slate-900 rounded-lg hover:bg-slate-800 cursor-pointer"
             >
               Start Mock Interview
+            </button>
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="p-12 text-center">
+            <FileText className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+            <p className="text-sm font-medium text-slate-700">No interview sessions match your filter</p>
+            <p className="text-xs text-slate-500 mt-1 mb-4">
+              Try clearing your search text or switching back to All Modes.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setSearch('');
+                setModeFilter('all');
+              }}
+              className="px-4 py-2 text-xs font-medium text-slate-800 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 cursor-pointer"
+            >
+              Clear Filters
             </button>
           </div>
         ) : (
@@ -136,7 +182,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                     </td>
                     <td className="py-3 px-4 text-xs">
                       <span className={s.status === 'completed' ? 'text-emerald-700 font-medium' : 'text-amber-700'}>
-                        {s.status === 'completed' ? 'Completed' : 'In Progress'}
+                        {s.status === 'completed' ? 'Completed' : 'Incomplete'}
                       </span>
                     </td>
                     <td className="py-3 px-4 text-xs text-slate-500">
@@ -146,7 +192,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                       {s.questionCount}
                     </td>
                     <td className="py-3 px-4 text-right font-mono tabular-nums text-slate-700">
-                      {s.totalDurationSec}s
+                      {formatDuration(s.totalDurationSec)}
                     </td>
                     <td className="py-3 px-4 text-right font-mono tabular-nums font-semibold">
                       <span
@@ -163,18 +209,23 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                     </td>
                     <td className="py-3 px-6 text-right">
                       <div className="inline-flex items-center gap-3">
-                        <button
-                          type="button"
-                          onClick={() => onOpenReport(s)}
-                          className="text-xs font-medium text-blue-700 hover:underline cursor-pointer"
-                        >
-                          View Report
-                        </button>
+                        {s.status === 'completed' ? (
+                          <button
+                            type="button"
+                            onClick={() => onOpenReport(s)}
+                            className="text-xs font-medium text-blue-700 hover:underline cursor-pointer"
+                          >
+                            View Report
+                          </button>
+                        ) : (
+                          <span className="text-xs text-slate-400">No report</span>
+                        )}
                         <button
                           type="button"
                           disabled={deletingId === s.id}
                           onClick={() => handleDelete(s.id)}
                           title="Delete session"
+                          aria-label={`Delete ${s.categoryName} session`}
                           className="text-slate-400 hover:text-red-700 disabled:opacity-40 cursor-pointer"
                         >
                           <Trash2 className="w-3.5 h-3.5" />

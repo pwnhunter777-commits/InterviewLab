@@ -9,6 +9,7 @@ import {
   setDoc,
   updateDoc,
   where,
+  writeBatch,
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import {
@@ -155,14 +156,25 @@ export async function createCustomCategory(params: {
   }
 }
 
-export async function deleteCustomCategory(categoryId: string): Promise<void> {
+export async function deleteCustomCategory(categoryId: string, uid?: string): Promise<void> {
   if (isLocalId(categoryId)) {
     deleteLocalCategory(categoryId);
     return;
   }
   const path = `categories/${categoryId}`;
   try {
-    await deleteDoc(doc(db, 'categories', categoryId));
+    const batch = writeBatch(db);
+    if (uid) {
+      const q = query(collection(db, 'questions'), where('ownerId', '==', uid));
+      const snap = await getDocs(q);
+      snap.docs.forEach((d) => {
+        if ((d.data() as { categoryId?: string }).categoryId === categoryId) {
+          batch.delete(d.ref);
+        }
+      });
+    }
+    batch.delete(doc(db, 'categories', categoryId));
+    await batch.commit();
   } catch (err) {
     handleFirestoreError(err, OperationType.DELETE, path);
   }
@@ -307,6 +319,10 @@ export async function saveSessionResponse(
   const responseId = makeSafeId('resp');
   const path = `sessions/${response.sessionId}/responses/${responseId}`;
   try {
+    const safeRatio = (val: unknown) => {
+      const n = Number(val);
+      return Number.isFinite(n) ? Math.max(-1, Math.min(100, n)) : -1;
+    };
     const payload = {
       userId: response.userId,
       sessionId: response.sessionId,
@@ -321,9 +337,9 @@ export async function saveSessionResponse(
       avgSilenceRatio: Math.max(0, Math.min(100, Number(response.avgSilenceRatio) || 0)),
       voiceClarityLabel: response.voiceClarityLabel,
       voiceClarityDb: Math.max(-120, Math.min(20, Number(response.voiceClarityDb) || -100)),
-      eyeContactRatio: Math.max(-1, Math.min(100, Number(response.eyeContactRatio) ?? -1)),
+      eyeContactRatio: safeRatio(response.eyeContactRatio),
       eyeContactStatus: response.eyeContactStatus.slice(0, 80),
-      facePresenceRatio: Math.max(-1, Math.min(100, Number(response.facePresenceRatio) ?? -1)),
+      facePresenceRatio: safeRatio(response.facePresenceRatio),
       relevanceScore: Math.max(0, Math.min(100, Number(response.relevanceScore) || 0)),
       keywordScore: Math.max(0, Math.min(100, Number(response.keywordScore) || 0)),
       communicationScore: Math.max(0, Math.min(100, Number(response.communicationScore) || 0)),
@@ -432,12 +448,14 @@ export async function deleteInterviewSession(sessionId: string, uid: string): Pr
   const path = `sessions/${sessionId}`;
   try {
     const responses = await listSessionResponses(sessionId, uid);
+    const batch = writeBatch(db);
     for (const r of responses) {
       if (r.id) {
-        await deleteDoc(doc(db, 'sessions', sessionId, 'responses', r.id));
+        batch.delete(doc(db, 'sessions', sessionId, 'responses', r.id));
       }
     }
-    await deleteDoc(doc(db, 'sessions', sessionId));
+    batch.delete(doc(db, 'sessions', sessionId));
+    await batch.commit();
   } catch (err) {
     handleFirestoreError(err, OperationType.DELETE, path);
   }

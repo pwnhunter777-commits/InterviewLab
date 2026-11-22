@@ -9,6 +9,8 @@ import {
   Loader2,
   Mic,
   MicOff,
+  RotateCcw,
+  SkipForward,
   Square,
   VideoOff,
 } from 'lucide-react';
@@ -47,11 +49,23 @@ interface LiveInterviewViewProps {
   questions: InterviewQuestion[];
   enableCamera: boolean;
   enableMic: boolean;
+  enableWebSpeech?: boolean;
   onExit: () => void;
   onCompleted: (session: InterviewSession, responses: SessionResponse[]) => void;
 }
 
 type QuestionPhase = 'ready' | 'recording' | 'transcribing' | 'reviewed' | 'evaluating' | 'evaluated';
+
+interface SpeechRecognitionInstance {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((e: { resultIndex: number; results: ArrayLike<{ 0: { transcript: string }; isFinal: boolean }> }) => void) | null;
+  onerror: ((e: { error?: string }) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+}
 
 export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
   userId,
@@ -60,10 +74,12 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
   questions,
   enableCamera,
   enableMic,
+  enableWebSpeech = true,
   onExit,
   onCompleted,
 }) => {
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionCreateFailed, setSessionCreateFailed] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [phase, setPhase] = useState<QuestionPhase>('ready');
   const [showHint, setShowHint] = useState(false);
@@ -71,10 +87,14 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
   const timeLimitSec = mode === 'demo' ? 60 : Math.max(90, category.defaultTimePerQuestionSec || 120);
   const [secondsLeft, setSecondsLeft] = useState(timeLimitSec);
   const [elapsedRecordingSec, setElapsedRecordingSec] = useState(0);
+  const [timerAnnouncement, setTimerAnnouncement] = useState('');
 
   const [transcript, setTranscript] = useState('');
   const [transcriptSource, setTranscriptSource] = useState<TranscriptSource>('unavailable');
-  const [recordingRef, setRecordingRef] = useState('not-recorded');
+  const [recordingRef, setRecordingRef] = useState('Audio not stored');
+
+  const [hasAudioTrack, setHasAudioTrack] = useState(false);
+  const [hasVideoTrack, setHasVideoTrack] = useState(enableCamera);
 
   const [audioSnap, setAudioSnap] = useState<LiveAudioSnapshot>({
     db: -80,
@@ -102,9 +122,14 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
   const audioChunksRef = useRef<Blob[]>([]);
   const audioTrackerRef = useRef<AudioTelemetryTracker>(new AudioTelemetryTracker());
   const visualTrackerRef = useRef<VisualCueTracker>(new VisualCueTracker());
-  const speechRecRef = useRef<{ stop: () => void } | null>(null);
+  const speechRecRef = useRef<SpeechRecognitionInstance | null>(null);
+  const liveSpeechCommittedRef = useRef<string>('');
   const liveSpeechTextRef = useRef<string>('');
+  const isRecordingRef = useRef<boolean>(false);
+  const speechFatalErrorRef = useRef<boolean>(false);
+  const hasRecordedCurrentRef = useRef<boolean>(false);
   const recordStartMsRef = useRef<number>(0);
+  const lastAnnouncedMarkRef = useRef<number | null>(null);
 
   const lastAudioStatsRef = useRef<{
     pauseCount: number;
@@ -124,65 +149,164 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
     facePresenceRatio: number;
   }>({
     eyeContactRatio: -1,
-    eyeContactStatus: enableCamera ? 'Unavailable (Camera Off)' : 'Unavailable (Camera Off)',
+    eyeContactStatus: enableCamera ? 'Unavailable' : 'Unavailable (Camera Off)',
     facePresenceRatio: -1,
   });
 
   const currentQuestion = questions[currentIndex];
 
-  // Create Firestore session on mount
-  useEffect(() => {
-    let active = true;
-    (async () => {
-      try {
-        const created = await createInterviewSession({
-          userId,
-          mode,
-          categoryId: category.id,
-          categoryName: category.name,
-          questionCount: questions.length,
-        });
-        if (active) setSessionId(created.id);
-      } catch (err) {
-        if (active) {
-          setErrorBanner(err instanceof Error ? err.message : 'Unable to initialize session in Firestore.');
-        }
-      }
-    })();
-    return () => {
-      active = false;
+  const resetQuestionTelemetry = (nextHasVideo: boolean, nextHasAudio: boolean) => {
+    hasRecordedCurrentRef.current = false;
+    liveSpeechCommittedRef.current = '';
+    liveSpeechTextRef.current = '';
+    lastAnnouncedMarkRef.current = null;
+    setTimerAnnouncement('');
+    setRecordingRef('Audio not stored');
+    lastAudioStatsRef.current = {
+      pauseCount: 0,
+      avgSilenceRatio: 0,
+      voiceClarityLabel: 'Unavailable',
+      voiceClarityDb: -100,
     };
-  }, [userId, mode, category.id, category.name, questions.length]);
+    lastVisualStatsRef.current = {
+      eyeContactRatio: -1,
+      eyeContactStatus: nextHasVideo ? 'Unavailable' : 'Unavailable (Camera Off)',
+      facePresenceRatio: -1,
+    };
+    setAudioSnap({
+      db: -80,
+      rmsNormalized: 0,
+      clarityLabel: nextHasAudio ? 'Moderate' : 'Unavailable',
+      isSpeaking: false,
+      pauseCount: 0,
+    });
+    setVisualSnap({
+      status: nextHasVideo ? 'Standby' : 'Unavailable (Camera Off)',
+      faceDetected: false,
+      centeredGaze: false,
+      eyeContactRatio: -1,
+    });
+  };
 
-  // Setup camera & microphone stream
+  // Dispose VisualCueTracker on component unmount
+  useEffect(() => {
+    const tracker = visualTrackerRef.current;
+    return () => {
+      tracker.dispose();
+    };
+  }, []);
+
+  // Setup camera & microphone stream (with audio-only fallback when cam+mic fails)
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      setHasAudioTrack(false);
+      setHasVideoTrack(false);
+      setMediaWarning(null);
+
       if (!enableCamera && !enableMic) {
         setMediaWarning('Camera and microphone are disabled. Enter or paste your answer in the transcript panel.');
+        setVisualSnap({
+          status: 'Unavailable (Camera Off)',
+          faceDetected: false,
+          centeredGaze: false,
+          eyeContactRatio: -1,
+        });
         return;
       }
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: enableCamera ? { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } : false,
-          audio: enableMic ? { echoCancellation: true, noiseSuppression: true } : false,
-        });
+
+      const attachStream = async (stream: MediaStream, warning: string | null) => {
         if (cancelled) {
           stream.getTracks().forEach((t) => t.stop());
           return;
         }
         streamRef.current = stream;
-        if (enableCamera && videoRef.current) {
+        const vTracks = stream.getVideoTracks().length > 0;
+        const aTracks = stream.getAudioTracks().length > 0;
+        setHasVideoTrack(vTracks);
+        setHasAudioTrack(aTracks);
+        setMediaWarning(warning);
+
+        if (vTracks && videoRef.current) {
           videoRef.current.srcObject = stream;
+          // Preload MediaPipe model as soon as camera stream is ready
+          visualTrackerRef.current.init().catch(() => {
+            // Tracked inside VisualCueTracker on start if init fails
+          });
+          setVisualSnap({
+            status: 'Ready (MediaPipe)',
+            faceDetected: false,
+            centeredGaze: false,
+            eyeContactRatio: -1,
+          });
+        } else {
+          setVisualSnap({
+            status: 'Unavailable (Camera Off)',
+            faceDetected: false,
+            centeredGaze: false,
+            eyeContactRatio: -1,
+          });
         }
+
+        if (!aTracks) {
+          setAudioSnap((prev) => ({ ...prev, clarityLabel: 'Unavailable' }));
+        }
+      };
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: enableCamera ? { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } : false,
+          audio: enableMic ? { echoCancellation: true, noiseSuppression: true } : false,
+        });
+        await attachStream(stream, null);
       } catch (err) {
+        if (enableCamera && enableMic) {
+          // Fallback to audio-only so user does not lose their microphone
+          try {
+            const audioStream = await navigator.mediaDevices.getUserMedia({
+              video: false,
+              audio: { echoCancellation: true, noiseSuppression: true },
+            });
+            await attachStream(
+              audioStream,
+              'Camera unavailable or blocked. Continuing with microphone audio only — visual cues are disabled.'
+            );
+            return;
+          } catch (audioErr) {
+            const audioMsg = audioErr instanceof Error ? audioErr.message : 'Microphone unavailable.';
+            if (!cancelled) {
+              setHasAudioTrack(false);
+              setHasVideoTrack(false);
+              setVisualSnap({
+                status: 'Unavailable (Camera Off)',
+                faceDetected: false,
+                centeredGaze: false,
+                eyeContactRatio: -1,
+              });
+              setMediaWarning(`Camera and microphone unavailable (${audioMsg}). Type your response below.`);
+            }
+            return;
+          }
+        }
+
         const msg = err instanceof Error ? err.message : 'Device access unavailable.';
-        setMediaWarning(`Media access unavailable (${msg}). You may continue using the text response box.`);
+        if (!cancelled) {
+          setHasAudioTrack(false);
+          setHasVideoTrack(false);
+          setVisualSnap({
+            status: 'Unavailable (Camera Off)',
+            faceDetected: false,
+            centeredGaze: false,
+            eyeContactRatio: -1,
+          });
+          setMediaWarning(`Media access unavailable (${msg}). You may continue using the text response box.`);
+        }
       }
     })();
 
     return () => {
       cancelled = true;
+      isRecordingRef.current = false;
       if (recorderRef.current && recorderRef.current.state !== 'inactive') {
         recorderRef.current.stop();
       }
@@ -194,6 +318,7 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
         } catch {
           // ignore
         }
+        speechRecRef.current = null;
       }
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
@@ -202,7 +327,7 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
     };
   }, [enableCamera, enableMic]);
 
-  // Countdown timer during recording
+  // Countdown timer during recording + milestone announcements (30s and 10s only)
   useEffect(() => {
     if (phase !== 'recording') return;
     const interval = window.setInterval(() => {
@@ -210,6 +335,12 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
       setElapsedRecordingSec(elapsed);
       const remaining = Math.max(0, timeLimitSec - elapsed);
       setSecondsLeft(remaining);
+
+      if ((remaining === 30 || remaining === 10) && lastAnnouncedMarkRef.current !== remaining) {
+        lastAnnouncedMarkRef.current = remaining;
+        setTimerAnnouncement(`${remaining} seconds remaining`);
+      }
+
       if (remaining <= 0) {
         handleStopRecording();
       }
@@ -218,58 +349,117 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, timeLimitSec]);
 
+  const stopBrowserSpeechPreview = () => {
+    if (speechRecRef.current) {
+      const activeRec = speechRecRef.current;
+      speechRecRef.current = null;
+      activeRec.onend = null;
+      try {
+        activeRec.stop();
+      } catch {
+        // ignore
+      }
+    }
+  };
+
   const startBrowserSpeechPreview = () => {
+    if (!enableWebSpeech) return;
+
     const SpeechRec =
       (window as unknown as { SpeechRecognition?: new () => unknown; webkitSpeechRecognition?: new () => unknown })
         .SpeechRecognition ||
       (window as unknown as { webkitSpeechRecognition?: new () => unknown }).webkitSpeechRecognition;
 
     if (!SpeechRec) return;
-    try {
-      const rec = new SpeechRec() as {
-        continuous: boolean;
-        interimResults: boolean;
-        lang: string;
-        onresult: (e: { results: ArrayLike<{ 0: { transcript: string }; isFinal: boolean }> }) => void;
-        onerror: () => void;
-        start: () => void;
-        stop: () => void;
-      };
-      rec.continuous = true;
-      rec.interimResults = true;
-      rec.lang = 'en-US';
-      liveSpeechTextRef.current = '';
-      rec.onresult = (event) => {
-        let full = '';
-        for (let i = 0; i < event.results.length; i++) {
-          full += event.results[i][0].transcript + ' ';
-        }
-        liveSpeechTextRef.current = full.trim();
-        setTranscript(full.trim());
-        setTranscriptSource('web_speech');
-      };
-      rec.onerror = () => {};
-      rec.start();
-      speechRecRef.current = rec;
-    } catch {
-      // Browser speech preview optional; Gemini transcription handles audio
-    }
+
+    speechFatalErrorRef.current = false;
+    liveSpeechCommittedRef.current = '';
+    liveSpeechTextRef.current = '';
+
+    const spawnRecognition = () => {
+      if (!isRecordingRef.current || speechFatalErrorRef.current) return;
+      try {
+        const rec = new SpeechRec() as SpeechRecognitionInstance;
+        rec.continuous = true;
+        rec.interimResults = true;
+        rec.lang = navigator.language || 'en-US';
+
+        let sessionFinalText = '';
+
+        rec.onresult = (event) => {
+          let finals = '';
+          let interim = '';
+          for (let i = 0; i < event.results.length; i++) {
+            const chunk = event.results[i][0].transcript;
+            if (event.results[i].isFinal) {
+              finals += chunk + ' ';
+            } else {
+              interim += chunk + ' ';
+            }
+          }
+          sessionFinalText = finals.trim();
+          const combined = [liveSpeechCommittedRef.current, sessionFinalText, interim.trim()]
+            .filter(Boolean)
+            .join(' ')
+            .trim();
+          liveSpeechTextRef.current = combined;
+          setTranscript(combined);
+          setTranscriptSource('web_speech');
+        };
+
+        rec.onerror = (ev) => {
+          const errCode = ev?.error || '';
+          if (
+            errCode === 'not-allowed' ||
+            errCode === 'service-not-allowed' ||
+            errCode === 'audio-capture'
+          ) {
+            speechFatalErrorRef.current = true;
+          }
+        };
+
+        rec.onend = () => {
+          if (sessionFinalText) {
+            liveSpeechCommittedRef.current = [liveSpeechCommittedRef.current, sessionFinalText]
+              .filter(Boolean)
+              .join(' ')
+              .trim();
+          }
+          if (isRecordingRef.current && !speechFatalErrorRef.current) {
+            spawnRecognition();
+          }
+        };
+
+        rec.start();
+        speechRecRef.current = rec;
+      } catch {
+        // Browser speech preview optional; Gemini transcription handles recorded audio
+      }
+    };
+
+    spawnRecognition();
   };
 
   const handleStartRecording = async () => {
+    const stream = streamRef.current;
+    const hasAudio = Boolean(stream && stream.getAudioTracks().length > 0);
+    const hasVideo = Boolean(stream && stream.getVideoTracks().length > 0);
+    if (!hasAudio) return;
+
     setErrorBanner(null);
+    setSessionCreateFailed(false);
     setCurrentEval(null);
     setTranscript('');
     setTranscriptSource('unavailable');
     setElapsedRecordingSec(0);
     setSecondsLeft(timeLimitSec);
+    resetQuestionTelemetry(hasVideo, hasAudio);
+
+    isRecordingRef.current = true;
+    hasRecordedCurrentRef.current = true;
     recordStartMsRef.current = Date.now();
     audioChunksRef.current = [];
     setPhase('recording');
-
-    const stream = streamRef.current;
-    const hasAudio = Boolean(stream && stream.getAudioTracks().length > 0);
-    const hasVideo = Boolean(stream && stream.getVideoTracks().length > 0);
 
     if (stream && hasAudio) {
       audioTrackerRef.current.start(stream, (snap) => setAudioSnap(snap));
@@ -312,19 +502,14 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
 
   const handleStopRecording = async () => {
     if (phase !== 'recording') return;
+    isRecordingRef.current = false;
     setPhase('transcribing');
+    setTimerAnnouncement('');
 
     const elapsedSec = Math.max(1, Math.round((Date.now() - recordStartMsRef.current) / 1000));
     setElapsedRecordingSec(elapsedSec);
 
-    if (speechRecRef.current) {
-      try {
-        speechRecRef.current.stop();
-      } catch {
-        // ignore
-      }
-      speechRecRef.current = null;
-    }
+    stopBrowserSpeechPreview();
 
     const audioStats = audioTrackerRef.current.stop();
     lastAudioStatsRef.current = audioStats;
@@ -341,12 +526,12 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
       });
     }
 
+    setRecordingRef('Audio not stored');
+
     const chunks = audioChunksRef.current;
     if (chunks.length > 0) {
       const mimeType = recorder?.mimeType || 'audio/webm';
       const audioBlob = new Blob(chunks, { type: mimeType });
-      const sizeKb = Math.max(1, Math.round(audioBlob.size / 1024));
-      setRecordingRef(`browser-media://${category.id}_q${currentIndex + 1} (${sizeKb} KB ${mimeType.split(';')[0]})`);
 
       try {
         const b64 = await blobToBase64(audioBlob);
@@ -374,29 +559,43 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
           );
         }
       }
-    } else {
-      setRecordingRef('text-response-only');
     }
 
     setPhase('reviewed');
   };
 
+  const ensureSessionId = async (): Promise<string> => {
+    if (sessionId) return sessionId;
+    try {
+      const created = await createInterviewSession({
+        userId,
+        mode,
+        categoryId: category.id,
+        categoryName: category.name,
+        questionCount: questions.length,
+      });
+      setSessionId(created.id);
+      setSessionCreateFailed(false);
+      return created.id;
+    } catch (err) {
+      setSessionCreateFailed(true);
+      throw err;
+    }
+  };
+
   const handleEvaluateAnswer = async () => {
     if (!currentQuestion) return;
-    if (!sessionId) {
-      setErrorBanner('Session is not initialized yet. Please wait a moment or check your connection.');
-      return;
-    }
+    const prevPhase = phase;
     setErrorBanner(null);
+    setSessionCreateFailed(false);
     setPhase('evaluating');
 
-    const finalDuration =
-      elapsedRecordingSec > 0
-        ? elapsedRecordingSec
-        : Math.max(10, Math.round(transcript.trim().split(/\s+/).filter(Boolean).length / 2.2));
+    // Typed or unrecorded answers must NOT get a synthetic duration or pace
+    const measuredDurationSec =
+      hasRecordedCurrentRef.current && elapsedRecordingSec > 0 ? elapsedRecordingSec : 0;
 
     const telemetry = buildMeasuredTelemetry({
-      durationSec: finalDuration,
+      durationSec: measuredDurationSec,
       transcript,
       audioStats: lastAudioStatsRef.current,
       visualStats: lastVisualStatsRef.current,
@@ -414,9 +613,11 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
         measuredTelemetry: telemetry,
       });
 
+      const activeSessionId = await ensureSessionId();
+
       const saved = await saveSessionResponse({
         userId,
-        sessionId,
+        sessionId: activeSessionId,
         questionId: currentQuestion.id,
         questionPrompt: currentQuestion.prompt,
         transcript: transcript.trim(),
@@ -445,7 +646,7 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
         strengths: evaluation.strengths,
         improvements: evaluation.improvements,
         measurementNotes: evaluation.measurementNotes,
-        recordingRef,
+        recordingRef: 'Audio not stored',
       });
 
       setCurrentEval(evaluation);
@@ -453,51 +654,41 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
       setPhase('evaluated');
     } catch (err) {
       setErrorBanner(err instanceof Error ? err.message : 'Evaluation failed.');
-      setPhase('reviewed');
+      setPhase(prevPhase === 'ready' ? 'ready' : 'reviewed');
     }
   };
 
-  const handleNextOrFinish = async () => {
-    if (currentIndex + 1 < questions.length) {
-      setCurrentIndex((i) => i + 1);
-      setPhase('ready');
-      setShowHint(false);
-      setSecondsLeft(timeLimitSec);
-      setElapsedRecordingSec(0);
-      setTranscript('');
-      setTranscriptSource('unavailable');
-      setCurrentEval(null);
-      setErrorBanner(null);
-      return;
-    }
-
-    if (!sessionId) return;
+  const finalizeSession = async (activeSessionId: string, responsesToFinalize: SessionResponse[]) => {
     setFinalizing(true);
     setErrorBanner(null);
 
     try {
-      const count = savedResponses.length || 1;
+      const count = responsesToFinalize.length || 1;
       const avgOverall = Math.round(
-        savedResponses.reduce((a, r) => a + r.overallQuestionScore, 0) / count
+        responsesToFinalize.reduce((a, r) => a + r.overallQuestionScore, 0) / count
       );
       const avgRelevance = Math.round(
-        savedResponses.reduce((a, r) => a + r.relevanceScore, 0) / count
+        responsesToFinalize.reduce((a, r) => a + r.relevanceScore, 0) / count
       );
       const avgClarity = Math.round(
-        savedResponses.reduce((a, r) => a + r.communicationScore, 0) / count
+        responsesToFinalize.reduce((a, r) => a + r.communicationScore, 0) / count
       );
       const avgKeyword = Math.round(
-        savedResponses.reduce((a, r) => a + r.keywordScore, 0) / count
+        responsesToFinalize.reduce((a, r) => a + r.keywordScore, 0) / count
       );
-      const avgWpm = Math.round(savedResponses.reduce((a, r) => a + r.wpm, 0) / count);
+      const wpmMeasured = responsesToFinalize.filter((r) => r.wpm > 0);
+      const avgWpm =
+        wpmMeasured.length > 0
+          ? Math.round(wpmMeasured.reduce((a, r) => a + r.wpm, 0) / wpmMeasured.length)
+          : 0;
       const totalDur = Math.round(
-        savedResponses.reduce((a, r) => a + r.speakingDurationSec, 0)
+        responsesToFinalize.reduce((a, r) => a + r.speakingDurationSec, 0)
       );
 
       const summary = await synthesizeSessionSummary({
         categoryName: category.name,
         mode,
-        questionSummaries: savedResponses.map((r) => ({
+        questionSummaries: responsesToFinalize.map((r) => ({
           questionPrompt: r.questionPrompt,
           overallQuestionScore: r.overallQuestionScore,
           relevanceScore: r.relevanceScore,
@@ -509,8 +700,8 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
       });
 
       await completeInterviewSession({
-        sessionId,
-        questionCount: savedResponses.length,
+        sessionId: activeSessionId,
+        questionCount: responsesToFinalize.length,
         overallScore: avgOverall,
         relevanceScore: avgRelevance,
         clarityScore: avgClarity,
@@ -523,13 +714,13 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
       });
 
       const finalSession: InterviewSession = {
-        id: sessionId,
+        id: activeSessionId,
         userId,
         mode,
         categoryId: category.id,
         categoryName: category.name,
         status: 'completed',
-        questionCount: savedResponses.length,
+        questionCount: responsesToFinalize.length,
         overallScore: avgOverall,
         relevanceScore: avgRelevance,
         clarityScore: avgClarity,
@@ -541,10 +732,67 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
         topImprovements: summary.topImprovements,
       };
 
-      onCompleted(finalSession, savedResponses);
+      onCompleted(finalSession, responsesToFinalize);
     } catch (err) {
       setErrorBanner(err instanceof Error ? err.message : 'Failed to finalize interview report.');
       setFinalizing(false);
+    }
+  };
+
+  const advanceQuestion = () => {
+    setCurrentIndex((i) => i + 1);
+    setPhase('ready');
+    setShowHint(false);
+    setSecondsLeft(timeLimitSec);
+    setElapsedRecordingSec(0);
+    setTranscript('');
+    setTranscriptSource('unavailable');
+    setCurrentEval(null);
+    setErrorBanner(null);
+    setSessionCreateFailed(false);
+    resetQuestionTelemetry(hasVideoTrack, hasAudioTrack);
+  };
+
+  const handleNextOrFinish = async () => {
+    if (currentIndex + 1 < questions.length) {
+      advanceQuestion();
+      return;
+    }
+
+    if (!sessionId || savedResponses.length === 0) {
+      setErrorBanner(
+        'No evaluated answers have been saved to this session yet. Please evaluate an answer before viewing your report.'
+      );
+      return;
+    }
+
+    await finalizeSession(sessionId, savedResponses);
+  };
+
+  const handleSkipQuestion = async () => {
+    if (phase === 'recording' || phase === 'transcribing' || phase === 'evaluating' || finalizing) {
+      return;
+    }
+    if (currentIndex + 1 < questions.length) {
+      advanceQuestion();
+      return;
+    }
+
+    if (savedResponses.length > 0 && sessionId) {
+      await finalizeSession(sessionId, savedResponses);
+    } else {
+      setErrorBanner(
+        'All questions were skipped. Answer at least one question to generate a report, or click Exit Session.'
+      );
+    }
+  };
+
+  const handleConfirmExit = () => {
+    const confirmed = window.confirm(
+      'Exit this live interview session? Unfinished progress on the current question will not be saved.'
+    );
+    if (confirmed) {
+      onExit();
     }
   };
 
@@ -556,6 +804,11 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
 
   return (
     <div className="space-y-6">
+      {/* Screen-reader milestone announcements only (never fires every second) */}
+      <span className="sr-only" aria-live="polite">
+        {timerAnnouncement}
+      </span>
+
       {/* Studio Top Strip */}
       <div className="bg-white border border-slate-200 rounded-xl px-6 py-4 flex flex-wrap items-center justify-between gap-4">
         <div>
@@ -580,7 +833,8 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
           </div>
 
           <button
-            onClick={onExit}
+            type="button"
+            onClick={handleConfirmExit}
             className="px-3.5 py-1.5 text-xs font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-50 cursor-pointer"
           >
             Exit Session
@@ -612,9 +866,21 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
       )}
 
       {errorBanner && (
-        <div className="p-3.5 rounded-lg bg-red-50 border border-red-200 text-xs text-red-900 flex items-start gap-2.5">
-          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-700" />
-          <span>{errorBanner}</span>
+        <div className="p-3.5 rounded-lg bg-red-50 border border-red-200 text-xs text-red-900 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-700" />
+            <span>{errorBanner}</span>
+          </div>
+          {sessionCreateFailed && (
+            <button
+              type="button"
+              onClick={handleEvaluateAnswer}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-red-700 rounded-lg hover:bg-red-800 cursor-pointer"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              Retry
+            </button>
+          )}
         </div>
       )}
 
@@ -676,6 +942,7 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
             </div>
 
             <textarea
+              aria-label="Captured response transcript"
               value={transcript}
               onChange={(e) => {
                 setTranscript(e.target.value);
@@ -695,24 +962,38 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
 
             <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
               {phase === 'ready' && (
-                <div className="flex items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={handleStartRecording}
-                    className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 cursor-pointer"
-                  >
-                    <Mic className="w-4 h-4" />
-                    Start Recording
-                  </button>
-                  {transcript.trim().length > 0 && (
+                <div className="flex flex-wrap items-center gap-3 w-full justify-between">
+                  <div className="flex flex-wrap items-center gap-3">
                     <button
                       type="button"
-                      onClick={handleEvaluateAnswer}
-                      className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-slate-800 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 cursor-pointer"
+                      onClick={handleStartRecording}
+                      disabled={!hasAudioTrack}
+                      title={!hasAudioTrack ? 'Microphone unavailable — type your answer instead' : undefined}
+                      className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                     >
-                      Evaluate Typed Answer
+                      <Mic className="w-4 h-4" />
+                      Start Recording
                     </button>
-                  )}
+                    {transcript.trim().length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleEvaluateAnswer}
+                        className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-slate-800 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 cursor-pointer"
+                      >
+                        Evaluate Typed Answer
+                      </button>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleSkipQuestion}
+                    disabled={finalizing}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg disabled:opacity-50 cursor-pointer"
+                  >
+                    <SkipForward className="w-3.5 h-3.5" />
+                    Skip question
+                  </button>
                 </div>
               )}
 
@@ -735,21 +1016,35 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
               )}
 
               {phase === 'reviewed' && (
-                <div className="flex flex-wrap items-center gap-3">
+                <div className="flex flex-wrap items-center justify-between gap-3 w-full">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={handleEvaluateAnswer}
+                      className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 cursor-pointer"
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      Evaluate &amp; Save Answer
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleStartRecording}
+                      disabled={!hasAudioTrack}
+                      title={!hasAudioTrack ? 'Microphone unavailable — type your answer instead' : undefined}
+                      className="px-3.5 py-2 text-xs font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                    >
+                      Re-record Answer
+                    </button>
+                  </div>
+
                   <button
                     type="button"
-                    onClick={handleEvaluateAnswer}
-                    className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-blue-700 rounded-lg hover:bg-blue-800 cursor-pointer"
+                    onClick={handleSkipQuestion}
+                    disabled={finalizing}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg disabled:opacity-50 cursor-pointer"
                   >
-                    <CheckCircle2 className="w-4 h-4" />
-                    Evaluate &amp; Save Answer
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleStartRecording}
-                    className="px-3.5 py-2 text-xs font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-50 cursor-pointer"
-                  >
-                    Re-record Answer
+                    <SkipForward className="w-3.5 h-3.5" />
+                    Skip question
                   </button>
                 </div>
               )}
@@ -863,7 +1158,7 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
             </div>
 
             <div className="aspect-video bg-slate-900 rounded-lg overflow-hidden relative flex items-center justify-center">
-              {enableCamera ? (
+              {hasVideoTrack ? (
                 <video
                   ref={videoRef}
                   autoPlay
@@ -883,17 +1178,17 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
             <div className="space-y-2 pt-2 border-t border-slate-200">
               <div className="flex items-center justify-between text-xs">
                 <span className="inline-flex items-center gap-1.5 font-medium text-slate-700">
-                  {enableMic ? <Mic className="w-3.5 h-3.5 text-blue-700" /> : <MicOff className="w-3.5 h-3.5 text-slate-400" />}
-                  Voice Clarity &amp; Level
+                  {hasAudioTrack ? <Mic className="w-3.5 h-3.5 text-blue-700" /> : <MicOff className="w-3.5 h-3.5 text-slate-400" />}
+                  Voice Level
                 </span>
                 <span className="font-mono tabular-nums text-slate-600">
-                  {enableMic ? `${audioSnap.clarityLabel} (${audioSnap.db} dBFS)` : 'Unavailable'}
+                  {hasAudioTrack ? `${audioSnap.clarityLabel} (${audioSnap.db} dBFS)` : 'Unavailable'}
                 </span>
               </div>
               <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-blue-700 transition-all duration-100"
-                  style={{ width: `${phase === 'recording' && enableMic ? audioSnap.rmsNormalized : 0}%` }}
+                  style={{ width: `${phase === 'recording' && hasAudioTrack ? audioSnap.rmsNormalized : 0}%` }}
                 />
               </div>
               <div className="flex items-center justify-between text-xs text-slate-500">
@@ -907,7 +1202,7 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
               <div className="flex items-center justify-between text-xs">
                 <span className="inline-flex items-center gap-1.5 font-medium text-slate-700">
                   <Eye className="w-3.5 h-3.5 text-blue-700" />
-                  Visual Gaze Cue
+                  Face Position
                 </span>
                 <span className="font-mono tabular-nums text-slate-600">
                   {visualSnap.eyeContactRatio >= 0 ? `${visualSnap.eyeContactRatio}% centered` : 'Unavailable'}
@@ -917,14 +1212,14 @@ export const LiveInterviewView: React.FC<LiveInterviewViewProps> = ({
                 <span>Measurement Source</span>
                 <span className="text-slate-700">{visualSnap.status}</span>
               </div>
-              {enableCamera && phase === 'recording' && visualSnap.status === 'Measured (MediaPipe)' && (
+              {hasVideoTrack && phase === 'recording' && visualSnap.status === 'Measured (MediaPipe)' && (
                 <div className="flex items-center justify-between text-xs text-slate-500">
                   <span>Frame Status</span>
                   <span className={visualSnap.centeredGaze ? 'text-emerald-700 font-medium' : 'text-amber-700 font-medium'}>
                     {visualSnap.faceDetected
                       ? visualSnap.centeredGaze
-                        ? 'Centered Eye Contact'
-                        : 'Look Toward Camera'
+                        ? 'Face Centered'
+                        : 'Center Face in Frame'
                       : 'Face Not Centered'}
                   </span>
                 </div>

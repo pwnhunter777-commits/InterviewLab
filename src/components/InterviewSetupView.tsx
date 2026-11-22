@@ -13,7 +13,19 @@ interface InterviewSetupViewProps {
     selectedQuestions: InterviewQuestion[];
     enableCamera: boolean;
     enableMic: boolean;
+    enableWebSpeech: boolean;
   }) => void;
+}
+
+function shuffleQuestions(list: InterviewQuestion[]): InterviewQuestion[] {
+  const copy = [...list];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = copy[i];
+    copy[i] = copy[j];
+    copy[j] = tmp;
+  }
+  return copy;
 }
 
 export const InterviewSetupView: React.FC<InterviewSetupViewProps> = ({
@@ -27,6 +39,7 @@ export const InterviewSetupView: React.FC<InterviewSetupViewProps> = ({
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>(categories[0]?.id || '');
   const [enableCamera, setEnableCamera] = useState(true);
   const [enableMic, setEnableMic] = useState(true);
+  const [enableWebSpeech, setEnableWebSpeech] = useState(true);
   const [hwStatus, setHwStatus] = useState<'idle' | 'testing' | 'ready' | 'error'>('idle');
   const [hwMessage, setHwMessage] = useState<string>('Run a quick device check or start directly.');
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -37,7 +50,7 @@ export const InterviewSetupView: React.FC<InterviewSetupViewProps> = ({
 
   const categoryQuestions = questions.filter((q) => q.categoryId === selectedCategory?.id);
   const targetCount = mode === 'demo' ? 2 : 5;
-  const sessionQuestions = categoryQuestions.slice(0, Math.min(targetCount, categoryQuestions.length));
+  const sessionQuestionCount = Math.min(targetCount, categoryQuestions.length);
 
   const stopTestStream = () => {
     if (testStreamRef.current) {
@@ -91,13 +104,16 @@ export const InterviewSetupView: React.FC<InterviewSetupViewProps> = ({
 
   const handleLaunch = () => {
     stopTestStream();
-    if (!selectedCategory || sessionQuestions.length === 0) return;
+    if (!selectedCategory || categoryQuestions.length === 0) return;
+    const shuffled = shuffleQuestions(categoryQuestions);
+    const selectedQuestions = shuffled.slice(0, Math.min(targetCount, shuffled.length));
     onStartSession({
       mode,
       category: selectedCategory,
-      selectedQuestions: sessionQuestions,
+      selectedQuestions,
       enableCamera,
       enableMic,
+      enableWebSpeech: enableMic && enableWebSpeech,
     });
   };
 
@@ -127,9 +143,9 @@ export const InterviewSetupView: React.FC<InterviewSetupViewProps> = ({
 
             {/* Mode Segmented Selection */}
             <div className="mb-6">
-              <label className="block text-xs font-semibold text-slate-700 mb-2">
+              <p className="block text-xs font-semibold text-slate-700 mb-2">
                 1. Interview Mode
-              </label>
+              </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <button
                   type="button"
@@ -163,7 +179,7 @@ export const InterviewSetupView: React.FC<InterviewSetupViewProps> = ({
                     <span className="text-xs font-mono text-blue-700">Up to 5 Questions</span>
                   </div>
                   <p className="text-xs text-slate-600 mt-1.5">
-                    120s per question · Full realistic session without hints and deep synthesis report.
+                    90–120s per question (set by category) · Full realistic session without hints and deep synthesis report.
                   </p>
                 </button>
               </div>
@@ -171,9 +187,9 @@ export const InterviewSetupView: React.FC<InterviewSetupViewProps> = ({
 
             {/* Category Selection */}
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-2">
+              <p className="block text-xs font-semibold text-slate-700 mb-2">
                 2. Interview Category
-              </label>
+              </p>
               <div className="space-y-2.5">
                 {categories.map((cat) => {
                   const qCount = questions.filter((q) => q.categoryId === cat.id).length;
@@ -210,7 +226,7 @@ export const InterviewSetupView: React.FC<InterviewSetupViewProps> = ({
             <div>
               <h2 className="text-base font-semibold text-slate-900">3. Webcam &amp; Microphone Check</h2>
               <p className="text-xs text-slate-500 mt-0.5">
-                MediaPipe face/gaze cues and audio clarity run locally in your browser.
+                MediaPipe face position cues and voice level analysis run locally in your browser. Recorded answers are sent to the server for Gemini transcription and scoring.
               </p>
             </div>
 
@@ -237,36 +253,67 @@ export const InterviewSetupView: React.FC<InterviewSetupViewProps> = ({
               )}
             </div>
 
-            <div className="flex items-center justify-between gap-4 pt-1">
-              <label className="inline-flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={enableCamera}
-                  onChange={(e) => {
-                    setEnableCamera(e.target.checked);
-                    stopTestStream();
-                    setHwStatus('idle');
-                  }}
-                  className="rounded border-slate-300 text-blue-700 focus:ring-blue-600"
-                />
-                <Camera className="w-4 h-4 text-slate-500" />
-                Enable Webcam
-              </label>
+            <div className="space-y-3 pt-1">
+              <div className="flex items-center justify-between gap-4">
+                <label
+                  htmlFor="setup-enable-camera"
+                  className="inline-flex items-center gap-2 text-sm text-slate-700 cursor-pointer"
+                >
+                  <input
+                    id="setup-enable-camera"
+                    type="checkbox"
+                    checked={enableCamera}
+                    onChange={(e) => {
+                      setEnableCamera(e.target.checked);
+                      stopTestStream();
+                      setHwStatus('idle');
+                    }}
+                    className="rounded border-slate-300 text-blue-700 focus:ring-blue-600"
+                  />
+                  <Camera className="w-4 h-4 text-slate-500" />
+                  Enable Webcam
+                </label>
 
-              <label className="inline-flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={enableMic}
-                  onChange={(e) => {
-                    setEnableMic(e.target.checked);
-                    stopTestStream();
-                    setHwStatus('idle');
-                  }}
-                  className="rounded border-slate-300 text-blue-700 focus:ring-blue-600"
-                />
-                <Mic className="w-4 h-4 text-slate-500" />
-                Enable Microphone
-              </label>
+                <label
+                  htmlFor="setup-enable-mic"
+                  className="inline-flex items-center gap-2 text-sm text-slate-700 cursor-pointer"
+                >
+                  <input
+                    id="setup-enable-mic"
+                    type="checkbox"
+                    checked={enableMic}
+                    onChange={(e) => {
+                      setEnableMic(e.target.checked);
+                      stopTestStream();
+                      setHwStatus('idle');
+                    }}
+                    className="rounded border-slate-300 text-blue-700 focus:ring-blue-600"
+                  />
+                  <Mic className="w-4 h-4 text-slate-500" />
+                  Enable Microphone
+                </label>
+              </div>
+
+              {enableMic && (
+                <div className="pt-2 border-t border-slate-100">
+                  <label
+                    htmlFor="setup-enable-web-speech"
+                    className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer"
+                  >
+                    <input
+                      id="setup-enable-web-speech"
+                      type="checkbox"
+                      checked={enableWebSpeech}
+                      onChange={(e) => setEnableWebSpeech(e.target.checked)}
+                      className="rounded border-slate-300 text-blue-700 focus:ring-blue-600"
+                    />
+                    Use live browser speech preview
+                  </label>
+                  <p className="text-xs text-slate-500 mt-1 pl-6">
+                    Optional live captions while speaking. On Chrome, browser speech preview streams live microphone audio to Google&apos;s speech service. Uncheck to rely solely on recorded audio transcribed when you stop.
+                  </p>
+                </div>
+              )}
             </div>
 
             <div className="flex items-center justify-between gap-3">
@@ -300,11 +347,11 @@ export const InterviewSetupView: React.FC<InterviewSetupViewProps> = ({
               <div className="flex items-center justify-between text-xs text-slate-600">
                 <span>Selected Session</span>
                 <span className="font-mono font-medium text-slate-900">
-                  {mode === 'pro' ? 'Pro' : 'Demo'} · {sessionQuestions.length} Questions
+                  {mode === 'pro' ? 'Pro' : 'Demo'} · {sessionQuestionCount} Questions
                 </span>
               </div>
 
-              {sessionQuestions.length === 0 ? (
+              {sessionQuestionCount === 0 ? (
                 <p className="text-xs text-red-700">
                   This category has no questions yet. Add a question in Question Bank first.
                 </p>

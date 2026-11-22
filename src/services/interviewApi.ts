@@ -1,12 +1,23 @@
+import { auth } from '../lib/firebase';
 import { EvaluationResult, InterviewMode, MeasuredTelemetry } from '../types/interview';
+
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (auth.currentUser) {
+    const token = await auth.currentUser.getIdToken();
+    headers.Authorization = `Bearer ${token}`;
+  }
+  return headers;
+}
 
 export async function transcribeAudioBlob(
   audioBase64: string,
   mimeType: string
 ): Promise<{ transcript: string; noSpeechDetected: boolean }> {
+  const headers = await getAuthHeaders();
   const res = await fetch('/api/interview/transcribe', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({ audioBase64, mimeType }),
   });
 
@@ -30,9 +41,10 @@ export async function evaluateInterviewAnswer(params: {
   mode: InterviewMode;
   measuredTelemetry: MeasuredTelemetry;
 }): Promise<EvaluationResult> {
+  const headers = await getAuthHeaders();
   const res = await fetch('/api/interview/evaluate', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(params),
   });
 
@@ -60,9 +72,10 @@ export async function synthesizeSessionSummary(params: {
   topStrengths: string[];
   topImprovements: string[];
 }> {
+  const headers = await getAuthHeaders();
   const res = await fetch('/api/interview/session-summary', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(params),
   });
 

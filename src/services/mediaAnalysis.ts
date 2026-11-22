@@ -176,6 +176,8 @@ export interface LiveVisualSnapshot {
 export class VisualCueTracker {
   private landmarker: FaceLandmarker | null = null;
   private timerId: number | null = null;
+  private runId = 0;
+  private initPromise: Promise<boolean> | null = null;
   private totalFrames = 0;
   private faceFrames = 0;
   private centeredGazeFrames = 0;
@@ -184,43 +186,54 @@ export class VisualCueTracker {
 
   async init(): Promise<boolean> {
     if (this.modelReady && this.landmarker) return true;
-    const origConsoleError = console.error;
-    console.error = (...args: unknown[]) => {
-      const first = typeof args[0] === 'string' ? args[0] : '';
-      if (first.includes('INFO: Created TensorFlow Lite XNNPACK delegate for CPU')) {
-        console.info(...args);
-        return;
-      }
-      origConsoleError(...args);
-    };
+    if (this.initPromise) return this.initPromise;
 
-    try {
-      const vision = await FilesetResolver.forVisionTasks('/mediapipe-wasm');
-      this.landmarker = await FaceLandmarker.createFromOptions(vision, {
-        baseOptions: {
-          modelAssetPath:
-            'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
-          delegate: 'CPU',
-        },
-        runningMode: 'VIDEO',
-        numFaces: 1,
-        outputFaceBlendshapes: false,
-        outputFacialTransformationMatrixes: false,
-      });
-      this.modelReady = true;
-      this.modelFailed = false;
-      return true;
-    } catch (err) {
-      console.warn('MediaPipe FaceLandmarker initialization unavailable, falling back transparently:', err);
-      this.modelReady = false;
-      this.modelFailed = true;
-      return false;
-    } finally {
-      console.error = origConsoleError;
-    }
+    this.initPromise = (async () => {
+      const origConsoleError = console.error;
+      console.error = (...args: unknown[]) => {
+        const first = typeof args[0] === 'string' ? args[0] : '';
+        if (first.includes('INFO: Created TensorFlow Lite XNNPACK delegate for CPU')) {
+          console.info(...args);
+          return;
+        }
+        origConsoleError(...args);
+      };
+
+      try {
+        const vision = await FilesetResolver.forVisionTasks('/mediapipe-wasm');
+        this.landmarker = await FaceLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: '/mediapipe-wasm/face_landmarker.task',
+            delegate: 'CPU',
+          },
+          runningMode: 'VIDEO',
+          numFaces: 1,
+          outputFaceBlendshapes: false,
+          outputFacialTransformationMatrixes: false,
+        });
+        this.modelReady = true;
+        this.modelFailed = false;
+        return true;
+      } catch (err) {
+        console.warn('MediaPipe FaceLandmarker initialization unavailable, falling back transparently:', err);
+        this.modelReady = false;
+        this.modelFailed = true;
+        return false;
+      } finally {
+        console.error = origConsoleError;
+        this.initPromise = null;
+      }
+    })();
+
+    return this.initPromise;
   }
 
   async start(videoEl: HTMLVideoElement, hasVideoTrack: boolean, onUpdate?: (snap: LiveVisualSnapshot) => void) {
+    if (this.timerId !== null) {
+      clearInterval(this.timerId);
+      this.timerId = null;
+    }
+    const myRun = ++this.runId;
     this.totalFrames = 0;
     this.faceFrames = 0;
     this.centeredGazeFrames = 0;
@@ -236,6 +249,7 @@ export class VisualCueTracker {
     }
 
     const ready = await this.init();
+    if (myRun !== this.runId) return;
     if (!ready || !this.landmarker) {
       onUpdate?.({
         status: 'Unavailable (Model Fallback)',
@@ -247,7 +261,7 @@ export class VisualCueTracker {
     }
 
     this.timerId = window.setInterval(() => {
-      if (!this.landmarker || videoEl.readyState < 2 || videoEl.videoWidth === 0) return;
+      if (myRun !== this.runId || !this.landmarker || videoEl.readyState < 2 || videoEl.videoWidth === 0) return;
       try {
         const prevErr = console.error;
         console.error = (...args: unknown[]) => {
@@ -324,6 +338,7 @@ export class VisualCueTracker {
     eyeContactStatus: string;
     facePresenceRatio: number;
   } {
+    this.runId += 1;
     if (this.timerId !== null) {
       clearInterval(this.timerId);
       this.timerId = null;
@@ -351,6 +366,24 @@ export class VisualCueTracker {
       facePresenceRatio: Math.round((this.faceFrames / this.totalFrames) * 100),
     };
   }
+
+  dispose(): void {
+    this.runId += 1;
+    if (this.timerId !== null) {
+      clearInterval(this.timerId);
+      this.timerId = null;
+    }
+    if (this.landmarker) {
+      try {
+        this.landmarker.close();
+      } catch {
+        // ignore close errors during unmount
+      }
+      this.landmarker = null;
+    }
+    this.modelReady = false;
+    this.initPromise = null;
+  }
 }
 
 export function buildMeasuredTelemetry(params: {
@@ -373,11 +406,14 @@ export function buildMeasuredTelemetry(params: {
     .split(/\s+/)
     .filter(Boolean);
   const wordCount = words.length;
-  const safeDuration = Math.max(1, Math.round(params.durationSec));
-  const wpm = wordCount > 0 ? Math.min(350, Math.round((wordCount / safeDuration) * 60)) : 0;
+  const recordedDuration = Math.max(0, Math.round(params.durationSec));
+  const wpm =
+    recordedDuration > 0 && wordCount > 0
+      ? Math.min(350, Math.round((wordCount / recordedDuration) * 60))
+      : 0;
 
   return {
-    speakingDurationSec: Math.round(params.durationSec),
+    speakingDurationSec: recordedDuration,
     wordCount,
     wpm,
     pauseCount: params.audioStats.pauseCount,
