@@ -1,4 +1,5 @@
 import { auth } from '../lib/firebase';
+import { getActiveLocalSession } from './localWorkspaceService';
 import { EvaluationResult, InterviewMode, MeasuredTelemetry } from '../types/interview';
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
@@ -6,6 +7,11 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
   if (auth.currentUser) {
     const token = await auth.currentUser.getIdToken();
     headers.Authorization = `Bearer ${token}`;
+  } else {
+    const localSession = getActiveLocalSession();
+    if (localSession?.uid) {
+      headers['X-Local-Candidate-Id'] = localSession.uid;
+    }
   }
   return headers;
 }

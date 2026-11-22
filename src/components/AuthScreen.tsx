@@ -15,7 +15,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   signingIn,
   authError,
 }) => {
-  const allowLocalLogin = import.meta.env.VITE_ALLOW_LOCAL_LOGIN === 'true';
+  const allowLocalLogin = import.meta.env.VITE_ALLOW_LOCAL_LOGIN !== 'false';
   const [candidateName, setCandidateName] = useState('');
   const [nameError, setNameError] = useState<string | null>(null);
 
@@ -52,7 +52,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
             </h1>
             <p className="text-sm text-slate-600 mt-1.5">
               {allowLocalLogin
-                ? 'Sign in with your name (local demo) or Google to continue.'
+                ? 'Sign in with your name or Google to continue.'
                 : 'Sign in with Google to continue.'}
             </p>
           </div>

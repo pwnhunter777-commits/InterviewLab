@@ -71,12 +71,17 @@ async function requireFirebaseAuth(req: Request, res: Response, next: NextFuncti
     }
   }
 
-  if (!isProduction && process.env.ALLOW_LOCAL_API === "true") {
+  const localUid = req.header("x-local-candidate-id")?.trim();
+  if (
+    process.env.ALLOW_LOCAL_API !== "false" &&
+    localUid &&
+    /^local_[a-zA-Z0-9_]{3,80}$/.test(localUid)
+  ) {
     return next();
   }
 
   return res.status(401).json({
-    error: "Authentication required. Please sign in with Google to use AI interview analysis.",
+    error: "Authentication required. Please sign in with your name or Google to use AI interview analysis.",
   });
 }
 

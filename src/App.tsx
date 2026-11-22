@@ -61,7 +61,7 @@ interface ActiveSetupConfig {
   enableWebSpeech: boolean;
 }
 
-const ALLOW_LOCAL_LOGIN = import.meta.env.VITE_ALLOW_LOCAL_LOGIN === 'true';
+const ALLOW_LOCAL_LOGIN = import.meta.env.VITE_ALLOW_LOCAL_LOGIN !== 'false';
 
 const VALID_TOP_ROUTES: ReadonlySet<AppRoute> = new Set([
   'dashboard',
