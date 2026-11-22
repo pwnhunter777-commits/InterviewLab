@@ -161,7 +161,7 @@ export const InterviewSetupView: React.FC<InterviewSetupViewProps> = ({
                     <span className="text-xs font-mono text-slate-600">2 Questions</span>
                   </div>
                   <p className="text-xs text-slate-600 mt-1.5">
-                    60s per question · Ideal for quick warm-ups with optional keyword hints.
+                    60s/question · Quick warm-up with hints.
                   </p>
                 </button>
 
@@ -179,7 +179,7 @@ export const InterviewSetupView: React.FC<InterviewSetupViewProps> = ({
                     <span className="text-xs font-mono text-blue-700">Up to 5 Questions</span>
                   </div>
                   <p className="text-xs text-slate-600 mt-1.5">
-                    90–120s per question (set by category) · Full realistic session without hints and deep synthesis report.
+                    90–120s/question · Full session, no hints.
                   </p>
                 </button>
               </div>
@@ -226,7 +226,7 @@ export const InterviewSetupView: React.FC<InterviewSetupViewProps> = ({
             <div>
               <h2 className="text-base font-semibold text-slate-900">3. Webcam &amp; Microphone Check</h2>
               <p className="text-xs text-slate-500 mt-0.5">
-                MediaPipe face position cues and voice level analysis run locally in your browser. Recorded answers are sent to the server for Gemini transcription and scoring.
+                Face and voice run locally; recorded answers go to Gemini for scoring.
               </p>
             </div>
 
@@ -310,7 +310,7 @@ export const InterviewSetupView: React.FC<InterviewSetupViewProps> = ({
                     Use live browser speech preview
                   </label>
                   <p className="text-xs text-slate-500 mt-1 pl-6">
-                    Optional live captions while speaking. On Chrome, browser speech preview streams live microphone audio to Google&apos;s speech service. Uncheck to rely solely on recorded audio transcribed when you stop.
+                    Live captions in Chrome stream mic audio to Google; uncheck for post-recording transcription only.
                   </p>
                 </div>
               )}

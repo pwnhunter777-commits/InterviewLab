@@ -1,5 +1,5 @@
 import React from 'react';
-import { ArrowRight, BarChart3, Clock, FileText, Play, Plus } from 'lucide-react';
+import { ArrowRight, FileText, Play, Plus } from 'lucide-react';
 import { InterviewSession, UserProfile } from '../types/interview';
 import { formatFirestoreDate, getMillis } from '../services/firestoreService';
 
@@ -66,10 +66,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
             Welcome back, {profile.displayName.split(' ')[0]}
           </h1>
-          <p className="text-sm text-slate-600 mt-1.5 max-w-2xl">
-            Run a quick 2-question Demo warm-up or a 5-question Pro evaluation with full speech,
-            keyword, and visual cue reporting.
-          </p>
         </div>
         <div className="flex flex-wrap items-center gap-3 shrink-0">
           <button
@@ -140,17 +136,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="flex items-center justify-between gap-4 mb-5">
             <div>
               <h2 className="text-base font-semibold text-slate-900">Score Trajectory</h2>
-              <p className="text-xs text-slate-500">Overall interview scores across recent sessions</p>
             </div>
-            <BarChart3 className="w-4 h-4 text-slate-400" />
           </div>
 
           {chartData.length === 0 ? (
             <div className="h-52 flex flex-col items-center justify-center border border-dashed border-slate-200 rounded-lg text-center px-6">
-              <p className="text-sm font-medium text-slate-700">No completed sessions yet</p>
-              <p className="text-xs text-slate-500 mt-1 mb-4">
-                Complete your first Demo or Pro interview to see performance trends here.
-              </p>
+              <p className="text-sm font-medium text-slate-700 mb-4">No completed sessions yet</p>
               <button
                 onClick={() => onStartSetup('demo')}
                 className="px-3.5 py-2 text-xs font-medium text-white bg-slate-900 rounded-lg hover:bg-slate-800 cursor-pointer"
@@ -169,17 +160,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="flex items-center justify-between gap-4 mb-5">
             <div>
               <h2 className="text-base font-semibold text-slate-900">Track Breakdown</h2>
-              <p className="text-xs text-slate-500">Average score by interview category</p>
             </div>
-            <Clock className="w-4 h-4 text-slate-400" />
           </div>
 
           {categoryAverages.length === 0 ? (
-            <div className="h-52 flex flex-col items-center justify-center border border-dashed border-slate-200 rounded-lg text-center px-6">
-              <p className="text-xs text-slate-500">
-                Category averages appear automatically once you finish an interview track.
-              </p>
-            </div>
+            <div className="h-52 flex flex-col items-center justify-center border border-dashed border-slate-200 rounded-lg text-center px-6" />
           ) : (
             <div className="space-y-4">
               {categoryAverages.map((cat) => (
@@ -214,7 +199,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between gap-4">
           <div>
             <h2 className="text-base font-semibold text-slate-900">Recent Interview Sessions</h2>
-            <p className="text-xs text-slate-500">Use Open Report on any completed session to inspect the full transcript &amp; AI audit</p>
           </div>
           {sessions.length > 0 && (
             <button
@@ -237,9 +221,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="p-10 text-center">
             <FileText className="w-8 h-8 text-slate-300 mx-auto mb-2" />
             <p className="text-sm font-medium text-slate-700">No interview reports recorded yet</p>
-            <p className="text-xs text-slate-500 mt-1">
-              Your evaluated responses, WPM pace, and keyword coverage reports will be saved here.
-            </p>
           </div>
         ) : (
           <div className="overflow-x-auto">

@@ -457,9 +457,6 @@ export const QuestionBankView: React.FC<QuestionBankViewProps> = ({
                   {q.isBuiltIn ? 'Built-in Curated' : 'Custom Question'}
                 </p>
                 <p className="text-sm font-semibold text-slate-900 leading-snug">{q.prompt}</p>
-                <p className="text-xs text-slate-600">
-                  Keywords: {q.expectedKeywords.join(', ') || 'None specified'}
-                </p>
               </div>
 
               {q.isBuiltIn ? (

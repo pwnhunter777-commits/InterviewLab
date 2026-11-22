@@ -476,8 +476,6 @@ function InterviewLabApp() {
     (itemId === 'setup' && route === 'live') ||
     (itemId === 'history' && route === 'report');
 
-  const isLocalDemoActive = ALLOW_LOCAL_LOGIN && Boolean(localUser && !user);
-
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex">
       {/* Desktop Sidebar (248px) */}
@@ -615,11 +613,6 @@ function InterviewLabApp() {
           </div>
         </header>
         <OfflineIndicator />
-        {isLocalDemoActive && (
-          <div className="bg-amber-50 border-b border-amber-200 px-6 py-2 text-xs text-amber-900 font-medium print:hidden">
-            Local demo mode - data stays on this device
-          </div>
-        )}
 
         <main className="flex-1 max-w-6xl w-full mx-auto px-6 py-8">
           {workspaceError && (
